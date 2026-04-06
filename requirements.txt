@@ -1,0 +1,5 @@
+# aether — Wireless Penetration Testing Orchestrator
+# No external pip packages required.
+# aether.py uses Python standard library only:
+#   argparse, json, os, re, shutil, subprocess, sys, time, datetime, pathlib, tempfile
+#

@@ -1,0 +1,35 @@
+{
+  "interface": "wlan0",
+  "monitor_interface": "wlan0mon",
+  "wordlist": "/usr/share/wordlists/rockyou.txt",
+  "target_ssids": [],
+  "target_bssids": [],
+  "channel": null,
+  "timeout_per_phase": 300,
+  "phases": {
+    "wpa_handshake": true,
+    "wpa_enterprise": false,
+    "krack": true,
+    "dragonblood_sae": true,
+    "dragonblood_drain": false
+  },
+  "tools": {
+    "wifite2": "wifite",
+    "eaphammer": "/opt/eaphammer/eaphammer",
+    "dragonslayer_client": "/opt/dragonslayer/dragonslayer-client.sh",
+    "dragonslayer_server": "/opt/dragonslayer/dragonslayer-server.sh",
+    "dragondrain": "/opt/dragondrain-and-time/dragondrain",
+    "krackattacks": "/opt/krackattacks-scripts/krackattack/krack-test-client.py"
+  },
+  "eaphammer": {
+    "auth": "wpa-eap",
+    "creds_output": "creds/",
+    "identity": ""
+  },
+  "dragonslayer": {
+    "attack": 1,
+    "client_conf": "/opt/dragonslayer/client.conf",
+    "hostapd_conf": "/opt/dragonslayer/hostapd.conf"
+  },
+  "output_dir": "aether_output"
+}

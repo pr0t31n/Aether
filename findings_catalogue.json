@@ -1,0 +1,126 @@
+[
+  {
+    "id": "AETHER-001",
+    "title": "WPA Pre-Shared Key Cracked",
+    "severity": "CRITICAL",
+    "category": "Wireless Authentication",
+    "description": "wifite2 successfully recovered the WPA/WPA2/WPA3 pre-shared key (PSK) for the target SSID via offline dictionary attack against a captured 4-way handshake or PMKID. An attacker with this key can decrypt all past and future traffic on the network (unless PMF/forward secrecy is enforced) and authenticate as a legitimate client.",
+    "remediation": "Replace the PSK with a strong random passphrase of at least 20 characters that does not appear in any common wordlist. Enforce WPA3-SAE where hardware supports it. Rotate the PSK immediately and audit which devices have stored it. Consider migrating to WPA3-Enterprise with certificate-based authentication for environments requiring stronger security.",
+    "references": []
+  },
+  {
+    "id": "AETHER-002",
+    "title": "WPA Handshake Captured",
+    "severity": "HIGH",
+    "category": "Wireless Authentication",
+    "description": "A complete WPA/WPA2 4-way handshake or PMKID was captured for the target SSID. While the PSK has not yet been recovered, the captured material can be subjected to unlimited offline brute-force or dictionary attacks without further access to the network. The handshake was obtained via deauthentication of a connected client or passive PMKID capture.",
+    "remediation": "Change the WPA/WPA2 PSK to a strong, unique passphrase not present in public wordlists. Enable WPA3-SAE to replace the 4-way handshake authentication exchange with a forward-secret SAE commit/confirm protocol that is resistant to offline attacks. If WPA3 is not available, enforce a minimum passphrase length of 20+ characters drawn from a high-entropy random source.",
+    "references": []
+  },
+  {
+    "id": "AETHER-003",
+    "title": "WPA-Enterprise Credentials Captured",
+    "severity": "CRITICAL",
+    "category": "WPA-Enterprise / 802.1X",
+    "description": "EAPHammer deployed a rogue AP that successfully impersonated the target WPA-Enterprise network, downgrades the 802.1X EAP exchange, and captured an MSCHAPv2 challenge/response or NTLM hash from an authenticating client. These hashes can be cracked offline or used directly in pass-the-hash attacks to authenticate to internal Windows/Active Directory resources.",
+    "remediation": "Deploy client-side certificate validation to prevent clients from connecting to rogue APs: configure the supplicant to validate the RADIUS server certificate against a pinned CA certificate and reject connections when the certificate does not match. Disable weaker EAP methods (PEAP/MSCHAPv2, EAP-MD5) in favour of EAP-TLS with mutual certificate authentication. Train users not to dismiss certificate warnings.",
+    "references": []
+  },
+  {
+    "id": "AETHER-004",
+    "title": "WPA3 SAE Dragonblood — Invalid Curve Attack Confirmed",
+    "severity": "HIGH",
+    "category": "WPA3 SAE Dragonblood",
+    "description": "The target WPA3 SAE implementation accepted an invalid elliptic-curve point during the SAE Commit exchange (attack mode 1 — invalid curve). This is a variant of the Dragonblood vulnerability class disclosed by Mathy Vanhoef and Eyal Ronen. Exploitation allows an active attacker to trick the AP into performing computations on a weak curve, potentially leaking the password encoding and enabling offline dictionary attacks against WPA3 networks that were intended to be resistant to such attacks.",
+    "remediation": "Apply firmware updates from the AP vendor that address CVE-2019-9494 and CVE-2019-9495. Ensure the WPA3 implementation validates that received curve points lie on the correct curve (point validation) before performing any SAE computations. Where firmware updates are unavailable, disable WPA3-SAE and use WPA2-Enterprise with EAP-TLS as a mitigation.",
+    "references": [
+      "CVE-2019-9494",
+      "CVE-2019-9495"
+    ]
+  },
+  {
+    "id": "AETHER-005",
+    "title": "WPA3 SAE Dragonblood — Reflection Attack Confirmed",
+    "severity": "HIGH",
+    "category": "WPA3 SAE Dragonblood",
+    "description": "The target WPA3 SAE implementation is vulnerable to the SAE reflection attack (attack mode 0). By reflecting the AP's own SAE Commit message back to it, the attacking station tricks the AP into deriving the same PWE (Password Element), which can be used to authenticate without knowing the actual PSK under certain conditions. This is part of the Dragonblood vulnerability class (CVE-2019-9494).",
+    "remediation": "Apply vendor firmware updates addressing CVE-2019-9494. The fix requires the AP to reject SAE Commit messages whose scalar and element fields match values it previously sent. Upgrade to a patched hostapd/wpa_supplicant version (2.10+).",
+    "references": [
+      "CVE-2019-9494"
+    ]
+  },
+  {
+    "id": "AETHER-006",
+    "title": "WPA3 SAE Dragonblood — Secondary Invalid Curve Attack Confirmed",
+    "severity": "HIGH",
+    "category": "WPA3 SAE Dragonblood",
+    "description": "The target WPA3 SAE implementation is vulnerable to a secondary invalid curve attack variant (attack mode 2). This variant exploits the same class of point-validation weakness as CVE-2019-9495 but uses a different curve parameter manipulation technique, demonstrating that the AP's SAE implementation does not adequately validate curve points across multiple attack vectors.",
+    "remediation": "Apply firmware updates that fully remediate CVE-2019-9495 across all SAE Commit handling code paths. Ensure the patched implementation performs explicit point validation on all received group elements before use in PWE derivation. Verify remediation by re-running dragonslayer attack modes 1 and 2.",
+    "references": [
+      "CVE-2019-9495",
+      "CVE-2019-9497",
+      "CVE-2019-9498",
+      "CVE-2019-9499"
+    ]
+  },
+  {
+    "id": "AETHER-007",
+    "title": "WPA3 SAE Dragonblood — Zero-Scalar Attack Confirmed",
+    "severity": "HIGH",
+    "category": "WPA3 SAE Dragonblood",
+    "description": "The target WPA3 SAE implementation accepted a SAE Commit message with a zero scalar value (attack mode 3). Sending a scalar of zero forces the resulting shared key to be zero or a trivially predictable value, potentially allowing an attacker to authenticate without the actual PSK. This is a variant of the Dragonblood flaw class (CVE-2019-9500–9502).",
+    "remediation": "Apply vendor firmware updates addressing CVE-2019-9500 through CVE-2019-9502. The AP must validate that received scalar values are within the valid range (1 ≤ scalar < order) and reject any Commit message with a scalar of zero or order.",
+    "references": [
+      "CVE-2019-9500",
+      "CVE-2019-9501",
+      "CVE-2019-9502"
+    ]
+  },
+  {
+    "id": "AETHER-008",
+    "title": "WPA3 SAE Resource Exhaustion (Dragondrain) Tested",
+    "severity": "MEDIUM",
+    "category": "WPA3 SAE Dragonblood",
+    "description": "The target AP was subjected to the Dragondrain SAE commit-flooding attack (CVE-2019-9496). The AP was flooded with forged SAE Commit messages using spoofed source MAC addresses at high rate, targeting curve group 21 (521-bit elliptic). If the AP does not implement anti-clogging tokens or rate limiting, this causes CPU exhaustion and potential denial of service affecting legitimate clients.",
+    "remediation": "Apply firmware updates that implement SAE anti-clogging (as specified in IEEE 802.11-2020 Section 12.4.6). Anti-clogging tokens force clients to echo a token before the AP performs expensive elliptic-curve computations, preventing CPU exhaustion. Also enable rate limiting on SAE Commit frames per source MAC address. Update to hostapd 2.10+ which includes anti-clogging support.",
+    "references": [
+      "CVE-2019-9496"
+    ]
+  },
+  {
+    "id": "AETHER-009",
+    "title": "WPA2 KRACK Vulnerability — Standard 4-Way Handshake Reinstallation",
+    "severity": "HIGH",
+    "category": "KRACK Key Reinstallation",
+    "description": "The target client or AP is vulnerable to the KRACK key reinstallation attack targeting the standard 4-way handshake (CVE-2017-13077). By replaying and manipulating handshake message 3, an attacker can cause the client to reinstall an already-in-use pairwise transient key (PTK), resetting its associated nonce and replay counters. This allows the attacker to replay, decrypt, and potentially forge 802.11 frames.",
+    "remediation": "Apply OS and driver security updates for all wireless clients that address CVE-2017-13077. On the AP side, apply firmware updates that prevent retransmission of handshake message 3 after the key has already been installed. For Android (especially 6.0), this vulnerability resulted in all-zero key reinstallation; priority patch Android devices. Verify remediation with the krackattacks test scripts.",
+    "references": [
+      "CVE-2017-13077",
+      "CWE-330"
+    ]
+  },
+  {
+    "id": "AETHER-010",
+    "title": "WPA2 KRACK Vulnerability — TPTK Variant",
+    "severity": "HIGH",
+    "category": "KRACK Key Reinstallation",
+    "description": "The target is vulnerable to the KRACK Temporal PTK (TPTK) variant (CVE-2017-13078). This variant exploits the handling of message 1 of the 4-way handshake to cause nonce reuse in the PTK re-derivation process. The attacker can trigger a PTK reinstallation by injecting a retransmitted handshake message 1 with a replayed ANonce, forcing the client to reinstall an already-used key.",
+    "remediation": "Apply security patches addressing CVE-2017-13078 for all affected wireless clients and APs. Ensure the supplicant implementation validates that new handshake sessions use fresh ANonces and that reinstallation of previously installed PTKs is prevented. Review and patch all wpa_supplicant and hostapd deployments to version 2.7+.",
+    "references": [
+      "CVE-2017-13078",
+      "CWE-330"
+    ]
+  },
+  {
+    "id": "AETHER-011",
+    "title": "WPA2 KRACK Vulnerability — Group Key Reinstallation",
+    "severity": "HIGH",
+    "category": "KRACK Key Reinstallation",
+    "description": "The target is vulnerable to KRACK group key reinstallation (CVE-2017-13080). By replaying group key handshake message 1, an attacker can cause the client to reinstall an already-in-use group temporal key (GTK) with a reset replay counter. This allows the attacker to replay broadcast and multicast frames, which can be leveraged to inject ARP spoofing packets or perform other layer-2 attacks against all clients on the network.",
+    "remediation": "Apply patches addressing CVE-2017-13080 for all wireless clients. The fix requires the supplicant to check whether the GTK being installed was already installed with the same key ID, and to reject reinstallation. Additionally, disable GTK rekeying on affected APs as a temporary mitigation until client patches are applied. Upgrade to wpa_supplicant 2.7+.",
+    "references": [
+      "CVE-2017-13080",
+      "CWE-330"
+    ]
+  }
+]
