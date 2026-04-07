@@ -1,230 +1,539 @@
 #!/usr/bin/env python3
-"""
-install.py — Aether Wireless Penetration Testing Orchestrator
-=============================================================
-Installs all Python packages from requirements.txt and all required system
-tools and GitHub-based attack tools. Platform-aware: supports Linux (apt)
-and macOS (brew). GitHub tools are cloned to /opt/<toolname>/.
+# install.py — Aether Wireless Penetration Testing Orchestrator
+# VERSION: 1.3.0 (referenced from /opt/pr0t31n/Aether/VERSION — do not bump here)
+# Installs all dependencies for aether.py and configures the system.
 
-Usage:
-    sudo python3 install.py
-"""
-
+import argparse
 import os
 import platform
+import shutil
 import subprocess
 import sys
 from pathlib import Path
 
-REQUIREMENTS_FILE = Path(__file__).parent / "requirements.txt"
+# ---------------------------------------------------------------------------
+# ANSI colour helpers
+# ---------------------------------------------------------------------------
+RESET  = "\033[0m"
+BOLD   = "\033[1m"
+RED    = "\033[91m"
+GREEN  = "\033[92m"
+YELLOW = "\033[93m"
+CYAN   = "\033[96m"
+BLUE   = "\033[94m"
+MAGENTA = "\033[95m"
 
-# System packages required by platform
-APT_PACKAGES = [
-    "aircrack-ng",        # airmon-ng, airodump-ng — monitor mode and AP scanning
-    "wireless-tools",     # iwlist fallback scanner
-    "iw",                 # iw monitor mode fallback
-    "iproute2",           # ip link management
-]
+def cprint(msg: str, colour: str = RESET, bold: bool = False) -> None:
+    prefix = BOLD if bold else ""
+    print(f"{prefix}{colour}{msg}{RESET}")
 
-BREW_PACKAGES = [
-    # macOS does not support monitor mode for most wireless attacks;
-    # packages listed here are best-effort for development/testing only.
-    "aircrack-ng",
-]
+def phase_header(title: str) -> None:
+    bar = "=" * 60
+    print()
+    cprint(bar, CYAN, bold=True)
+    cprint(f"  {title}", CYAN, bold=True)
+    cprint(bar, CYAN, bold=True)
 
-# GitHub-based tools: (repo_url, clone_target_dir, friendly_name)
-GITHUB_TOOLS = [
-    (
-        "https://github.com/kimocoder/wifite2",
-        "/opt/wifite2",
-        "wifite2 (by kimocoder / originally derv82)",
-    ),
-    (
-        "https://github.com/s0lst1c3/eaphammer",
-        "/opt/eaphammer",
-        "EAPHammer (by s0lst1c3)",
-    ),
-    (
-        "https://github.com/vanhoefm/dragonslayer",
-        "/opt/dragonslayer",
-        "dragonslayer (by Mathy Vanhoef @vanhoefm)",
-    ),
-    (
-        "https://github.com/vanhoefm/dragondrain-and-time",
-        "/opt/dragondrain-and-time",
-        "dragondrain (by Mathy Vanhoef @vanhoefm)",
-    ),
-    (
-        "https://github.com/vanhoefm/krackattacks-scripts",
-        "/opt/krackattacks-scripts",
-        "krackattacks-scripts (by Mathy Vanhoef @vanhoefm)",
-    ),
-]
+def info(msg: str)    -> None: cprint(f"  [*] {msg}", BLUE)
+def success(msg: str) -> None: cprint(f"  [+] {msg}", GREEN)
+def warn(msg: str)    -> None: cprint(f"  [!] {msg}", YELLOW)
+def error(msg: str)   -> None: cprint(f"  [-] {msg}", RED)
 
+# ---------------------------------------------------------------------------
+# OS detection
+# ---------------------------------------------------------------------------
 
-def _run(cmd: list, check: bool = True, **kwargs) -> subprocess.CompletedProcess:
-    print(f"  $ {' '.join(str(c) for c in cmd)}")
-    return subprocess.run(cmd, check=check, **kwargs)
-
-
-def _detect_platform() -> str:
-    """Return 'linux', 'macos', or 'unknown'."""
-    system = platform.system().lower()
-    if system == "linux":
-        return "linux"
-    if system == "darwin":
+def detect_os() -> str:
+    """Return one of: macos | kali | ubuntu | rhel | suse | windows | unknown"""
+    system = platform.system()
+    if system == "Windows":
+        return "windows"
+    if system == "Darwin":
         return "macos"
+    if system == "Linux":
+        release_files = ["/etc/os-release", "/usr/lib/os-release"]
+        release_info = {}
+        for rf in release_files:
+            if os.path.exists(rf):
+                with open(rf) as fh:
+                    for line in fh:
+                        line = line.strip()
+                        if "=" in line:
+                            k, _, v = line.partition("=")
+                            release_info[k] = v.strip('"').lower()
+                break
+        name = release_info.get("ID", "")
+        like = release_info.get("ID_LIKE", "")
+        if "kali" in name:
+            return "kali"
+        if "ubuntu" in name or "ubuntu" in like:
+            return "ubuntu"
+        if name in ("rhel", "centos", "rocky", "almalinux", "fedora") or "rhel" in like or "fedora" in like:
+            return "rhel"
+        if name in ("opensuse", "sles", "suse") or "suse" in like:
+            return "suse"
+        # fallback debian-like
+        if "debian" in name or "debian" in like:
+            return "ubuntu"
     return "unknown"
 
+# ---------------------------------------------------------------------------
+# Command runner
+# ---------------------------------------------------------------------------
 
-def install_python_packages() -> None:
-    print("\n[*] Installing Python packages from requirements.txt ...")
-    if not REQUIREMENTS_FILE.exists():
-        print(f"    [!] requirements.txt not found at {REQUIREMENTS_FILE}")
+def run(cmd: list, check: bool = False, dry_run: bool = False,
+        env: dict = None, cwd: str = None) -> int:
+    """Run a command; return exit code. If dry_run, just print and return 0."""
+    display = " ".join(str(c) for c in cmd)
+    if dry_run:
+        cprint(f"    [DRY-RUN] {display}", MAGENTA)
+        return 0
+    info(f"Running: {display}")
+    try:
+        result = subprocess.run(
+            cmd,
+            env={**os.environ, **(env or {})},
+            cwd=cwd,
+        )
+        if check and result.returncode != 0:
+            error(f"Command failed (exit {result.returncode}): {display}")
+        return result.returncode
+    except FileNotFoundError:
+        error(f"Executable not found for command: {display}")
+        return 127
+    except Exception as exc:
+        error(f"Unexpected error running {display}: {exc}")
+        return 1
+
+# ---------------------------------------------------------------------------
+# Privilege helpers
+# ---------------------------------------------------------------------------
+
+def is_root() -> bool:
+    return hasattr(os, "getuid") and os.getuid() == 0
+
+def require_root() -> None:
+    if not is_root():
+        error("This installer must be run as root (or with sudo) on Linux.")
+        sys.exit(1)
+
+# ---------------------------------------------------------------------------
+# Package managers
+# ---------------------------------------------------------------------------
+
+APT_PACKAGES = [
+    "aircrack-ng", "reaver", "hcxdumptool", "hcxtools", "hashcat",
+    "asleap", "iw", "wireless-tools", "iproute2", "net-tools",
+    "python3-pip", "python3-dev", "git", "libssl-dev", "libpcap-dev",
+]
+
+DNF_PACKAGES = [
+    "epel-release", "aircrack-ng", "hashcat", "iw", "wireless-tools",
+    "iproute", "net-tools", "python3-pip", "python3-devel", "git",
+    "openssl-devel", "libpcap-devel",
+]
+
+ZYPPER_PACKAGES = [
+    "aircrack-ng", "hashcat", "iw", "wireless-tools", "iproute2",
+    "net-tools", "python3-pip", "python3-devel", "git",
+]
+
+BREW_PACKAGES = ["aircrack-ng", "hashcat"]
+
+
+def phase_apt(dry_run: bool) -> None:
+    phase_header("PHASE 1 — System Packages (apt)")
+    require_root()
+    info("Updating package lists…")
+    run(["apt-get", "update", "-y"], check=True, dry_run=dry_run)
+    info("Upgrading installed packages…")
+    run(["apt-get", "upgrade", "-y"], check=True, dry_run=dry_run)
+    info(f"Installing: {' '.join(APT_PACKAGES)}")
+    run(["apt-get", "install", "-y"] + APT_PACKAGES, check=True, dry_run=dry_run)
+
+
+def phase_dnf(dry_run: bool) -> None:
+    phase_header("PHASE 1 — System Packages (dnf)")
+    require_root()
+    # Install epel-release first so subsequent packages resolve
+    run(["dnf", "install", "-y", "epel-release"], dry_run=dry_run)
+    run(["dnf", "upgrade", "-y"], dry_run=dry_run)
+    info(f"Installing: {' '.join(DNF_PACKAGES)}")
+    run(["dnf", "install", "-y"] + DNF_PACKAGES, check=True, dry_run=dry_run)
+    warn("hcxdumptool/hcxtools may not be available in EPEL; "
+         "you may need to build from source: https://github.com/ZerBea/hcxdumptool")
+
+
+def phase_zypper(dry_run: bool) -> None:
+    phase_header("PHASE 1 — System Packages (zypper)")
+    require_root()
+    run(["zypper", "refresh"], dry_run=dry_run)
+    run(["zypper", "update", "-y"], dry_run=dry_run)
+    info(f"Installing: {' '.join(ZYPPER_PACKAGES)}")
+    run(["zypper", "install", "-y"] + ZYPPER_PACKAGES, check=True, dry_run=dry_run)
+
+
+def phase_brew(dry_run: bool) -> None:
+    phase_header("PHASE 1 — System Packages (Homebrew / macOS)")
+    warn("Note: Aether requires Linux for monitor mode and most wireless phases.")
+    warn("macOS support is limited to passive scanning with compatible adapters.")
+
+    brew_bin = shutil.which("brew")
+    if not brew_bin:
+        error("Homebrew not found. Install from https://brew.sh and re-run.")
         return
-    try:
-        _run([sys.executable, "-m", "pip", "install", "--break-system-packages", "-r", str(REQUIREMENTS_FILE)])
-        print("    [+] Python packages installed.")
-    except subprocess.CalledProcessError as exc:
-        print(f"    [!] pip install failed: {exc}")
+
+    if is_root():
+        sudo_user = os.environ.get("SUDO_USER", "")
+        if not sudo_user:
+            warn("Running as root but SUDO_USER is not set — skipping brew install "
+                 "to avoid corrupting Homebrew. Re-run as your normal user.")
+            return
+        base_cmd = ["sudo", "-u", sudo_user, brew_bin]
+    else:
+        base_cmd = [brew_bin]
+
+    info(f"Installing brew packages: {' '.join(BREW_PACKAGES)}")
+    run(base_cmd + ["install"] + BREW_PACKAGES, dry_run=dry_run)
 
 
-def install_system_packages_linux() -> None:
-    print("\n[*] Installing system packages via apt ...")
-    try:
-        _run(["apt-get", "update", "-qq"], check=False)
-        _run(["apt-get", "install", "-y"] + APT_PACKAGES)
-        print("    [+] System packages installed.")
-    except subprocess.CalledProcessError as exc:
-        print(f"    [!] apt install failed: {exc}")
-    except FileNotFoundError:
-        print("    [!] apt-get not found — are you on a Debian/Ubuntu system?")
+# ---------------------------------------------------------------------------
+# Pip phase (no pip packages for Aether — stdlib only)
+# ---------------------------------------------------------------------------
+
+def phase_pip(dry_run: bool) -> None:
+    phase_header("PHASE 2 — Python Packages (pip)")
+    info("Aether uses only Python standard-library modules — no pip packages required.")
+    success("Pip phase complete (nothing to install).")
 
 
-def install_system_packages_macos() -> None:
-    print("\n[*] Installing system packages via brew ...")
-    try:
-        _brew_user = os.environ.get("SUDO_USER", "")
-        _brew_pfx  = ["sudo", "-u", _brew_user] if _brew_user and _brew_user != "root" else []
-        _run(_brew_pfx + ["brew", "install"] + BREW_PACKAGES)
-        print("    [+] Homebrew packages installed.")
-    except subprocess.CalledProcessError as exc:
-        print(f"    [!] brew install failed: {exc}")
-    except FileNotFoundError:
-        print("    [!] brew not found — install Homebrew from https://brew.sh first.")
+# ---------------------------------------------------------------------------
+# Go phase (no Go tools for Aether)
+# ---------------------------------------------------------------------------
+
+def phase_go(dry_run: bool) -> None:
+    phase_header("PHASE 3 — Go Tools")
+    info("Aether does not use any Go tools — skipping.")
+    success("Go phase complete (nothing to install).")
 
 
-def clone_github_tools() -> None:
-    print("\n[*] Cloning GitHub-based attack tools to /opt/ ...")
-    for repo_url, target_dir, friendly_name in GITHUB_TOOLS:
-        target = Path(target_dir)
-        print(f"\n  [{friendly_name}]")
-        print(f"    Repo   : {repo_url}")
-        print(f"    Target : {target_dir}")
-        if target.exists():
-            print(f"    [i] Already exists — pulling latest changes ...")
+# ---------------------------------------------------------------------------
+# Git phase
+# ---------------------------------------------------------------------------
+
+GIT_REPOS = [
+    {
+        "url":  "https://github.com/kimocoder/wifite2",
+        "dest": "/opt/wifite2",
+        "post": ["python3", "/opt/wifite2/setup.py", "install"],
+        "post_cwd": None,
+        "label": "wifite2",
+    },
+    {
+        "url":  "https://github.com/s0lst1c3/eaphammer",
+        "dest": "/opt/eaphammer",
+        "post": ["pip3", "install", "--break-system-packages", "-r",
+                 "/opt/eaphammer/requirements.txt"],
+        "post_cwd": None,
+        "label": "eaphammer",
+    },
+    {
+        "url":  "https://github.com/vanhoefm/dragonslayer",
+        "dest": "/opt/dragonslayer",
+        "post": None,
+        "post_cwd": None,
+        "label": "dragonslayer",
+    },
+    {
+        "url":  "https://github.com/vanhoefm/dragondrain-and-time",
+        "dest": "/opt/dragondrain-and-time",
+        "post": None,
+        "post_cwd": None,
+        "label": "dragondrain-and-time",
+    },
+    {
+        "url":  "https://github.com/vanhoefm/krackattacks-scripts",
+        "dest": "/opt/krackattacks-scripts",
+        "post": None,
+        "post_cwd": None,
+        "label": "krackattacks-scripts",
+    },
+]
+
+
+def clone_or_update(repo: dict, dry_run: bool) -> None:
+    url   = repo["url"]
+    dest  = repo["dest"]
+    label = repo["label"]
+    dest_path = Path(dest)
+
+    if dest_path.exists():
+        info(f"{label}: directory exists — pulling latest changes…")
+        rc = run(["git", "-C", dest, "pull", "--ff-only"], dry_run=dry_run)
+        if rc != 0:
+            warn(f"{label}: git pull failed — continuing with existing clone.")
+    else:
+        info(f"{label}: cloning {url} → {dest}")
+        rc = run(["git", "clone", "--depth=1", url, dest], check=True, dry_run=dry_run)
+        if rc != 0:
+            error(f"{label}: clone failed — skipping post-install steps.")
+            return
+
+    if repo.get("post"):
+        info(f"{label}: running post-install step…")
+        run(repo["post"], cwd=repo.get("post_cwd"), dry_run=dry_run)
+
+
+def phase_git(os_id: str, dry_run: bool) -> None:
+    phase_header("PHASE 4 — Git Repositories")
+    if os_id == "macos":
+        warn("Skipping git tool clones on macOS — these tools require Linux.")
+        return
+    for repo in GIT_REPOS:
+        clone_or_update(repo, dry_run)
+    success("Git phase complete.")
+
+
+# ---------------------------------------------------------------------------
+# Symlinks
+# ---------------------------------------------------------------------------
+
+SYMLINKS = {
+    "/usr/local/bin/aether": "/opt/pr0t31n/Aether/aether.py",
+}
+
+
+def phase_symlinks(dry_run: bool) -> None:
+    phase_header("PHASE 5 — Symlinks")
+    for link, target in SYMLINKS.items():
+        target_path = Path(target)
+        link_path   = Path(link)
+        if not target_path.exists():
+            warn(f"Target not found: {target} — symlink will be created anyway.")
+        if link_path.is_symlink() or link_path.exists():
+            info(f"Removing existing: {link}")
+            if not dry_run:
+                try:
+                    link_path.unlink()
+                except OSError as exc:
+                    error(f"Could not remove {link}: {exc}")
+                    continue
+        info(f"Creating symlink: {link} → {target}")
+        if not dry_run:
             try:
-                _run(["git", "-C", str(target), "pull", "--ff-only"], check=False)
-            except Exception as exc:
-                print(f"    [!] git pull failed: {exc}")
+                link_path.symlink_to(target)
+                if target_path.exists():
+                    target_path.chmod(0o755)
+                success(f"Symlink created: {link}")
+            except OSError as exc:
+                error(f"Could not create symlink {link}: {exc}")
+
+
+# ---------------------------------------------------------------------------
+# Service installation
+# ---------------------------------------------------------------------------
+
+SYSTEMD_SERVICE = """\
+[Unit]
+Description=Aether Wireless Penetration Testing Orchestrator
+After=network.target
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/bin/python3 /opt/pr0t31n/Aether/aether.py
+WorkingDirectory=/opt/pr0t31n/Aether
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+"""
+
+LAUNCHD_PLIST = """\
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.pr0t31n.aether</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/python3</string>
+        <string>/opt/pr0t31n/Aether/aether.py</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>/opt/pr0t31n/Aether</string>
+    <key>RunAtLoad</key>
+    <false/>
+    <key>KeepAlive</key>
+    <false/>
+    <key>StandardOutPath</key>
+    <string>/var/log/aether.log</string>
+    <key>StandardErrorPath</key>
+    <string>/var/log/aether.err</string>
+</dict>
+</plist>
+"""
+
+
+def phase_service(os_id: str, dry_run: bool) -> None:
+    phase_header("PHASE 6 — Service Installation")
+    if os_id in ("kali", "ubuntu", "rhel", "suse"):
+        service_path = Path("/etc/systemd/system/pr0t31n-aether.service")
+        info(f"Writing systemd unit: {service_path}")
+        if not dry_run:
+            try:
+                service_path.write_text(SYSTEMD_SERVICE)
+                run(["systemctl", "daemon-reload"], dry_run=dry_run)
+                run(["systemctl", "enable", "pr0t31n-aether"], dry_run=dry_run)
+                success("Systemd service installed and enabled.")
+            except OSError as exc:
+                error(f"Failed to write service file: {exc}")
         else:
+            cprint(f"    [DRY-RUN] Would write {service_path}", MAGENTA)
+
+    elif os_id == "macos":
+        plist_path = Path("/Library/LaunchDaemons/com.pr0t31n.aether.plist")
+        info(f"Writing launchd plist: {plist_path}")
+        if not dry_run:
             try:
-                target.parent.mkdir(parents=True, exist_ok=True)
-                _run(["git", "clone", "--depth=1", repo_url, str(target)])
-                print(f"    [+] Cloned to {target_dir}")
-            except subprocess.CalledProcessError as exc:
-                print(f"    [!] git clone failed: {exc}")
-            except FileNotFoundError:
-                print("    [!] git not found — install git first.")
-                return
-
-    # Post-clone: install eaphammer Python dependencies if present
-    eaphammer_req = Path("/opt/eaphammer/requirements.txt")
-    if eaphammer_req.exists():
-        print("\n  [*] Installing EAPHammer Python dependencies ...")
-        try:
-            _run([sys.executable, "-m", "pip", "install", "--break-system-packages", "-r", str(eaphammer_req)])
-            print("    [+] EAPHammer dependencies installed.")
-        except subprocess.CalledProcessError as exc:
-            print(f"    [!] EAPHammer pip install failed: {exc}")
+                plist_path.write_text(LAUNCHD_PLIST)
+                run(["launchctl", "load", str(plist_path)], dry_run=dry_run)
+                success("Launchd plist installed and loaded.")
+            except OSError as exc:
+                error(f"Failed to write plist: {exc}")
+        else:
+            cprint(f"    [DRY-RUN] Would write {plist_path}", MAGENTA)
+    else:
+        warn("Service installation skipped for this OS.")
 
 
-def _install_symlinks() -> None:
-    """Create /usr/local/bin symlinks for all-user access (including root)."""
-    from pathlib import Path as _Path
-    import stat as _stat
-    app_dir = _Path(__file__).parent.resolve()
-    bin_dir = _Path("/usr/local/bin")
+# ---------------------------------------------------------------------------
+# Post-install verification
+# ---------------------------------------------------------------------------
 
-    # (script_relative_to_app_dir, symlink_name_in_bin_dir)
-    LINKS = [
-        ("aether.py", "aether"),
-    ]
+VERIFY_TOOLS = [
+    "aircrack-ng", "airodump-ng", "aireplay-ng", "airmon-ng",
+    "wash", "hcxdumptool", "hcxpcapngtool", "hashcat", "wifite",
+]
 
-    try:
-        bin_dir.mkdir(parents=True, exist_ok=True)
-    except PermissionError:
-        print("[!] Cannot access /usr/local/bin — run as root to install symlinks.")
-        return
 
-    for script_rel, link_name in LINKS:
-        script = app_dir / script_rel
-        link   = bin_dir / link_name
-        if not script.exists():
-            print(f"[~] Script not found, skipping symlink: {script}")
-            continue
-        # Make script executable
-        current = script.stat().st_mode
-        script.chmod(current | _stat.S_IXUSR | _stat.S_IXGRP | _stat.S_IXOTH)
-        # Ensure shebang
-        try:
-            text = script.read_text(encoding="utf-8", errors="ignore")
-            if not text.startswith("#!"):
-                script.write_text("#!/usr/bin/env python3\n" + text, encoding="utf-8")
-        except Exception:
-            pass
-        # Create/replace symlink
-        if link.exists() or link.is_symlink():
-            link.unlink()
-        link.symlink_to(script)
-        print(f"[+] Symlink installed: {link}  →  {script}")
+def phase_verify() -> None:
+    phase_header("POST-INSTALL SUMMARY")
+    all_ok = True
+    for tool in VERIFY_TOOLS:
+        found = shutil.which(tool)
+        if found:
+            success(f"{tool:25s} found at {found}")
+        else:
+            warn(f"{tool:25s} NOT FOUND")
+            all_ok = False
+    print()
+    if all_ok:
+        success("All tools verified successfully.")
+    else:
+        warn("Some tools were not found. Check the output above and install manually if needed.")
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+def parse_args() -> argparse.Namespace:
+    p = argparse.ArgumentParser(
+        description="Aether installer — wireless penetration testing orchestrator",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    p.add_argument("--skip-apt",  action="store_true", help="Skip system package installation")
+    p.add_argument("--skip-pip",  action="store_true", help="Skip pip package installation")
+    p.add_argument("--skip-go",   action="store_true", help="Skip Go tool installation")
+    p.add_argument("--skip-git",  action="store_true", help="Skip git repository cloning")
+    p.add_argument("--check",     action="store_true", help="Dry-run — print commands without executing")
+    return p.parse_args()
 
 
 def main() -> None:
-    print("=" * 60)
-    print("  Aether — Wireless Penetration Testing Orchestrator")
-    print("  Installer")
-    print("=" * 60)
+    args = parse_args()
+    dry_run = args.check
 
-    os_type = _detect_platform()
-    print(f"\n[i] Detected platform: {platform.system()} ({os_type})")
+    cprint("\n" + "=" * 60, GREEN, bold=True)
+    cprint("  Aether Installer  —  v1.3.0", GREEN, bold=True)
+    cprint("  Wireless Penetration Testing Orchestrator", GREEN, bold=True)
+    cprint("=" * 60 + "\n", GREEN, bold=True)
 
-    if os_type == "linux" and os.geteuid() != 0:
-        print("[!] Warning: not running as root. System package installation may fail.")
-        print("    Re-run with: sudo python3 install.py\n")
+    if dry_run:
+        warn("DRY-RUN MODE — no changes will be made to this system.\n")
 
-    # Step 1: Python packages
-    install_python_packages()
+    os_id = detect_os()
+    info(f"Detected OS: {os_id}")
 
-    # Step 2: System packages
-    if os_type == "linux":
-        install_system_packages_linux()
-    elif os_type == "macos":
-        install_system_packages_macos()
+    # Windows gate
+    if os_id == "windows":
+        error("Aether is designed for Linux. Windows is not supported.")
+        error("Wireless monitor mode and injection require Linux with a compatible adapter.")
+        sys.exit(1)
+
+    # macOS advisory
+    if os_id == "macos":
+        warn("macOS detected. Monitor mode and most Aether phases require Linux.")
+        warn("Only a limited subset of tools will be installed via Homebrew.")
+
+    # Phase 1 — system packages
+    if not args.skip_apt:
+        if os_id in ("kali", "ubuntu"):
+            phase_apt(dry_run)
+        elif os_id == "rhel":
+            phase_dnf(dry_run)
+        elif os_id == "suse":
+            phase_zypper(dry_run)
+        elif os_id == "macos":
+            phase_brew(dry_run)
+        else:
+            warn(f"Unknown OS '{os_id}' — skipping system package phase.")
     else:
-        print(f"\n[!] Unsupported platform '{os_type}' — skipping system package install.")
-        print("    Install aircrack-ng and wireless-tools manually.")
+        info("Skipping system package phase (--skip-apt).")
 
-    # Step 3: GitHub tools
-    clone_github_tools()
+    # Phase 2 — pip
+    if not args.skip_pip:
+        phase_pip(dry_run)
+    else:
+        info("Skipping pip phase (--skip-pip).")
 
-    # Step 4: Symlinks
-    _install_symlinks()
+    # Phase 3 — Go
+    if not args.skip_go:
+        phase_go(dry_run)
+    else:
+        info("Skipping Go phase (--skip-go).")
 
-    print("\n" + "=" * 60)
-    print("  Installation complete.")
-    print("  Review any [!] warnings above before running aether.py.")
-    print("=" * 60 + "\n")
+    # Phase 4 — Git
+    if not args.skip_git:
+        phase_git(os_id, dry_run)
+    else:
+        info("Skipping git phase (--skip-git).")
+
+    # Phase 5 — Symlinks
+    if not dry_run and os_id != "windows":
+        if is_root():
+            phase_symlinks(dry_run)
+        else:
+            warn("Not running as root — skipping symlink creation.")
+    elif dry_run:
+        phase_symlinks(dry_run)
+
+    # Phase 6 — Service
+    if is_root() or dry_run:
+        phase_service(os_id, dry_run)
+    else:
+        warn("Not running as root — skipping service installation.")
+
+    # Verify
+    phase_verify()
+
+    print()
+    cprint("  Aether installation complete.", GREEN, bold=True)
+    cprint("  Run:  aether --help  to get started.\n", CYAN)
 
 
 if __name__ == "__main__":

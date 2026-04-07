@@ -1664,6 +1664,28 @@ Examples:
     return parser.parse_args()
 
 
+def _startup_tool_check() -> None:
+    """Warn about missing tools at startup. On Linux, exits if the
+    core aircrack-ng suite is missing since no phases can run without it."""
+    if platform.system() != "Linux":
+        return  # macOS support is limited — skip full check
+    CRITICAL = ["airmon-ng", "airodump-ng", "aircrack-ng", "aireplay-ng"]
+    IMPORTANT = ["hcxdumptool", "hcxpcapngtool", "hashcat", "wash", "asleap"]
+    missing_critical  = [t for t in CRITICAL  if not shutil.which(t)]
+    missing_important = [t for t in IMPORTANT if not shutil.which(t)]
+    if missing_critical or missing_important:
+        print("[!] Aether startup tool check:", file=sys.stderr)
+    for t in missing_critical:
+        print(f"    MISSING (critical) : {t}  — install aircrack-ng suite",
+              file=sys.stderr)
+    for t in missing_important:
+        print(f"    MISSING (important): {t}  — run: sudo python3 install.py",
+              file=sys.stderr)
+    if missing_critical:
+        print("[!] Cannot continue without the aircrack-ng suite.\n", file=sys.stderr)
+        sys.exit(1)
+
+
 def main():
     args = parse_args()
 
@@ -1677,6 +1699,8 @@ def main():
         print("  drain      — Phase 4:  WPA3 resource exhaustion        (dragondrain)")
         print("  krack      — Phase 5:  WPA2 KRACK testing              (krackattacks)")
         sys.exit(0)
+
+    _startup_tool_check()
 
     config_path = Path(args.config)
     if not config_path.exists():
