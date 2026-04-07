@@ -6,7 +6,9 @@
     "category": "Wireless Authentication",
     "description": "wifite2 successfully recovered the WPA/WPA2/WPA3 pre-shared key (PSK) for the target SSID via offline dictionary attack against a captured 4-way handshake or PMKID. An attacker with this key can decrypt all past and future traffic on the network (unless PMF/forward secrecy is enforced) and authenticate as a legitimate client.",
     "remediation": "Replace the PSK with a strong random passphrase of at least 20 characters that does not appear in any common wordlist. Enforce WPA3-SAE where hardware supports it. Rotate the PSK immediately and audit which devices have stored it. Consider migrating to WPA3-Enterprise with certificate-based authentication for environments requiring stronger security.",
-    "references": []
+    "references": [],
+    "cvss_score": 8.1,
+    "cvss_vector": "AV:A/AC:H/PR:N/UI:N/S:C/C:H/I:H/A:N"
   },
   {
     "id": "AETHER-002",
@@ -15,7 +17,9 @@
     "category": "Wireless Authentication",
     "description": "A complete WPA/WPA2 4-way handshake or PMKID was captured for the target SSID. While the PSK has not yet been recovered, the captured material can be subjected to unlimited offline brute-force or dictionary attacks without further access to the network. The handshake was obtained via deauthentication of a connected client or passive PMKID capture.",
     "remediation": "Change the WPA/WPA2 PSK to a strong, unique passphrase not present in public wordlists. Enable WPA3-SAE to replace the 4-way handshake authentication exchange with a forward-secret SAE commit/confirm protocol that is resistant to offline attacks. If WPA3 is not available, enforce a minimum passphrase length of 20+ characters drawn from a high-entropy random source.",
-    "references": []
+    "references": [],
+    "cvss_score": 6.8,
+    "cvss_vector": "AV:A/AC:H/PR:N/UI:N/S:C/C:H/I:N/A:N"
   },
   {
     "id": "AETHER-003",
@@ -24,34 +28,40 @@
     "category": "WPA-Enterprise / 802.1X",
     "description": "EAPHammer deployed a rogue AP that successfully impersonated the target WPA-Enterprise network, downgrades the 802.1X EAP exchange, and captured an MSCHAPv2 challenge/response or NTLM hash from an authenticating client. These hashes can be cracked offline or used directly in pass-the-hash attacks to authenticate to internal Windows/Active Directory resources.",
     "remediation": "Deploy client-side certificate validation to prevent clients from connecting to rogue APs: configure the supplicant to validate the RADIUS server certificate against a pinned CA certificate and reject connections when the certificate does not match. Disable weaker EAP methods (PEAP/MSCHAPv2, EAP-MD5) in favour of EAP-TLS with mutual certificate authentication. Train users not to dismiss certificate warnings.",
-    "references": []
+    "references": [],
+    "cvss_score": 8.8,
+    "cvss_vector": "AV:A/AC:L/PR:N/UI:R/S:C/C:H/I:H/A:N"
   },
   {
     "id": "AETHER-004",
-    "title": "WPA3 SAE Dragonblood — Invalid Curve Attack Confirmed",
+    "title": "WPA3 SAE Dragonblood \u2014 Invalid Curve Attack Confirmed",
     "severity": "HIGH",
     "category": "WPA3 SAE Dragonblood",
-    "description": "The target WPA3 SAE implementation accepted an invalid elliptic-curve point during the SAE Commit exchange (attack mode 1 — invalid curve). This is a variant of the Dragonblood vulnerability class disclosed by Mathy Vanhoef and Eyal Ronen. Exploitation allows an active attacker to trick the AP into performing computations on a weak curve, potentially leaking the password encoding and enabling offline dictionary attacks against WPA3 networks that were intended to be resistant to such attacks.",
+    "description": "The target WPA3 SAE implementation accepted an invalid elliptic-curve point during the SAE Commit exchange (attack mode 1 \u2014 invalid curve). This is a variant of the Dragonblood vulnerability class disclosed by Mathy Vanhoef and Eyal Ronen. Exploitation allows an active attacker to trick the AP into performing computations on a weak curve, potentially leaking the password encoding and enabling offline dictionary attacks against WPA3 networks that were intended to be resistant to such attacks.",
     "remediation": "Apply firmware updates from the AP vendor that address CVE-2019-9494 and CVE-2019-9495. Ensure the WPA3 implementation validates that received curve points lie on the correct curve (point validation) before performing any SAE computations. Where firmware updates are unavailable, disable WPA3-SAE and use WPA2-Enterprise with EAP-TLS as a mitigation.",
     "references": [
       "CVE-2019-9494",
       "CVE-2019-9495"
-    ]
+    ],
+    "cvss_score": 7.4,
+    "cvss_vector": "AV:A/AC:H/PR:N/UI:N/S:U/C:H/I:N/A:N"
   },
   {
     "id": "AETHER-005",
-    "title": "WPA3 SAE Dragonblood — Reflection Attack Confirmed",
+    "title": "WPA3 SAE Dragonblood \u2014 Reflection Attack Confirmed",
     "severity": "HIGH",
     "category": "WPA3 SAE Dragonblood",
     "description": "The target WPA3 SAE implementation is vulnerable to the SAE reflection attack (attack mode 0). By reflecting the AP's own SAE Commit message back to it, the attacking station tricks the AP into deriving the same PWE (Password Element), which can be used to authenticate without knowing the actual PSK under certain conditions. This is part of the Dragonblood vulnerability class (CVE-2019-9494).",
     "remediation": "Apply vendor firmware updates addressing CVE-2019-9494. The fix requires the AP to reject SAE Commit messages whose scalar and element fields match values it previously sent. Upgrade to a patched hostapd/wpa_supplicant version (2.10+).",
     "references": [
       "CVE-2019-9494"
-    ]
+    ],
+    "cvss_score": 7.4,
+    "cvss_vector": "AV:A/AC:H/PR:N/UI:N/S:U/C:H/I:N/A:N"
   },
   {
     "id": "AETHER-006",
-    "title": "WPA3 SAE Dragonblood — Secondary Invalid Curve Attack Confirmed",
+    "title": "WPA3 SAE Dragonblood \u2014 Secondary Invalid Curve Attack Confirmed",
     "severity": "HIGH",
     "category": "WPA3 SAE Dragonblood",
     "description": "The target WPA3 SAE implementation is vulnerable to a secondary invalid curve attack variant (attack mode 2). This variant exploits the same class of point-validation weakness as CVE-2019-9495 but uses a different curve parameter manipulation technique, demonstrating that the AP's SAE implementation does not adequately validate curve points across multiple attack vectors.",
@@ -61,20 +71,24 @@
       "CVE-2019-9497",
       "CVE-2019-9498",
       "CVE-2019-9499"
-    ]
+    ],
+    "cvss_score": 7.4,
+    "cvss_vector": "AV:A/AC:H/PR:N/UI:N/S:U/C:H/I:N/A:N"
   },
   {
     "id": "AETHER-007",
-    "title": "WPA3 SAE Dragonblood — Zero-Scalar Attack Confirmed",
+    "title": "WPA3 SAE Dragonblood \u2014 Zero-Scalar Attack Confirmed",
     "severity": "HIGH",
     "category": "WPA3 SAE Dragonblood",
-    "description": "The target WPA3 SAE implementation accepted a SAE Commit message with a zero scalar value (attack mode 3). Sending a scalar of zero forces the resulting shared key to be zero or a trivially predictable value, potentially allowing an attacker to authenticate without the actual PSK. This is a variant of the Dragonblood flaw class (CVE-2019-9500–9502).",
-    "remediation": "Apply vendor firmware updates addressing CVE-2019-9500 through CVE-2019-9502. The AP must validate that received scalar values are within the valid range (1 ≤ scalar < order) and reject any Commit message with a scalar of zero or order.",
+    "description": "The target WPA3 SAE implementation accepted a SAE Commit message with a zero scalar value (attack mode 3). Sending a scalar of zero forces the resulting shared key to be zero or a trivially predictable value, potentially allowing an attacker to authenticate without the actual PSK. This is a variant of the Dragonblood flaw class (CVE-2019-9500\u20139502).",
+    "remediation": "Apply vendor firmware updates addressing CVE-2019-9500 through CVE-2019-9502. The AP must validate that received scalar values are within the valid range (1 \u2264 scalar < order) and reject any Commit message with a scalar of zero or order.",
     "references": [
       "CVE-2019-9500",
       "CVE-2019-9501",
       "CVE-2019-9502"
-    ]
+    ],
+    "cvss_score": 7.4,
+    "cvss_vector": "AV:A/AC:H/PR:N/UI:N/S:U/C:H/I:N/A:N"
   },
   {
     "id": "AETHER-008",
@@ -85,11 +99,13 @@
     "remediation": "Apply firmware updates that implement SAE anti-clogging (as specified in IEEE 802.11-2020 Section 12.4.6). Anti-clogging tokens force clients to echo a token before the AP performs expensive elliptic-curve computations, preventing CPU exhaustion. Also enable rate limiting on SAE Commit frames per source MAC address. Update to hostapd 2.10+ which includes anti-clogging support.",
     "references": [
       "CVE-2019-9496"
-    ]
+    ],
+    "cvss_score": 5.9,
+    "cvss_vector": "AV:A/AC:H/PR:N/UI:N/S:U/C:N/I:N/A:H"
   },
   {
     "id": "AETHER-009",
-    "title": "WPA2 KRACK Vulnerability — Standard 4-Way Handshake Reinstallation",
+    "title": "WPA2 KRACK Vulnerability \u2014 Standard 4-Way Handshake Reinstallation",
     "severity": "HIGH",
     "category": "KRACK Key Reinstallation",
     "description": "The target client or AP is vulnerable to the KRACK key reinstallation attack targeting the standard 4-way handshake (CVE-2017-13077). By replaying and manipulating handshake message 3, an attacker can cause the client to reinstall an already-in-use pairwise transient key (PTK), resetting its associated nonce and replay counters. This allows the attacker to replay, decrypt, and potentially forge 802.11 frames.",
@@ -97,11 +113,13 @@
     "references": [
       "CVE-2017-13077",
       "CWE-330"
-    ]
+    ],
+    "cvss_score": 8.1,
+    "cvss_vector": "AV:A/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:N"
   },
   {
     "id": "AETHER-010",
-    "title": "WPA2 KRACK Vulnerability — TPTK Variant",
+    "title": "WPA2 KRACK Vulnerability \u2014 TPTK Variant",
     "severity": "HIGH",
     "category": "KRACK Key Reinstallation",
     "description": "The target is vulnerable to the KRACK Temporal PTK (TPTK) variant (CVE-2017-13078). This variant exploits the handling of message 1 of the 4-way handshake to cause nonce reuse in the PTK re-derivation process. The attacker can trigger a PTK reinstallation by injecting a retransmitted handshake message 1 with a replayed ANonce, forcing the client to reinstall an already-used key.",
@@ -109,11 +127,13 @@
     "references": [
       "CVE-2017-13078",
       "CWE-330"
-    ]
+    ],
+    "cvss_score": 8.1,
+    "cvss_vector": "AV:A/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:N"
   },
   {
     "id": "AETHER-011",
-    "title": "WPA2 KRACK Vulnerability — Group Key Reinstallation",
+    "title": "WPA2 KRACK Vulnerability \u2014 Group Key Reinstallation",
     "severity": "HIGH",
     "category": "KRACK Key Reinstallation",
     "description": "The target is vulnerable to KRACK group key reinstallation (CVE-2017-13080). By replaying group key handshake message 1, an attacker can cause the client to reinstall an already-in-use group temporal key (GTK) with a reset replay counter. This allows the attacker to replay broadcast and multicast frames, which can be leveraged to inject ARP spoofing packets or perform other layer-2 attacks against all clients on the network.",
@@ -121,6 +141,101 @@
     "references": [
       "CVE-2017-13080",
       "CWE-330"
+    ],
+    "cvss_score": 8.1,
+    "cvss_vector": "AV:A/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:N"
+  },
+  {
+    "id": "AETHER-012",
+    "title": "WEP Encryption in Use",
+    "severity": "HIGH",
+    "category": "Legacy Wireless Encryption",
+    "description": "The target network uses WEP (Wired Equivalent Privacy), which has been cryptographically broken since 2001 (CVE-2001-0309). The RC4 stream cipher reuses 24-bit initialisation vectors (IVs), allowing the FMS, KoreK, and PTW statistical attacks to recover any WEP key from roughly 50 000 captured frames \u2014 achievable in under a minute on an active network. An attacker within radio range can decrypt all traffic and authenticate as a legitimate station. WEP was deprecated by IEEE 802.11i in 2004 and formally withdrawn. No patch exists; the protocol must be replaced.",
+    "remediation": "Immediately replace WEP with WPA3-Personal (SAE) or at minimum WPA2-Personal (CCMP/AES). WEP cannot be patched \u2014 upgrade the AP firmware or replace the device. Segment any WEP-only legacy devices onto an isolated VLAN with no access to sensitive resources until they can be replaced.",
+    "references": [
+      "CVE-2001-0309",
+      "IEEE 802.11i-2004",
+      "PTW Attack (Pyshkin, Tews, Weinmann 2007)"
+    ],
+    "cvss_score": 9.1,
+    "cvss_vector": "AV:A/AC:L/PR:N/UI:N/S:C/C:H/I:H/A:H"
+  },
+  {
+    "id": "AETHER-013",
+    "title": "WEP Key Cracked",
+    "severity": "CRITICAL",
+    "category": "Legacy Wireless Encryption",
+    "description": "aircrack-ng recovered the WEP key using the PTW statistical attack against collected IVs. With the key an attacker can decrypt all past and future traffic in real time, inject arbitrary 802.11 frames, and authenticate as a legitimate station. The network must be treated as fully compromised. All credentials, session tokens, and data transmitted over this network must be assumed captured by an adversary.",
+    "remediation": "Treat the network as compromised. Replace WEP with WPA3-Personal immediately. Rotate all credentials used on devices that connected to this network. Review logs for unauthorised access since the network was deployed. Notify affected users. Replace hardware that cannot support WPA2.",
+    "references": [
+      "CVE-2001-0309",
+      "PTW Attack (Pyshkin, Tews, Weinmann 2007)"
+    ],
+    "cvss_score": 9.8,
+    "cvss_vector": "AV:A/AC:L/PR:N/UI:N/S:C/C:H/I:H/A:H"
+  },
+  {
+    "id": "AETHER-014",
+    "title": "Open / Unencrypted Wireless Network",
+    "severity": "MEDIUM",
+    "category": "Wireless Encryption",
+    "description": "The target network operates without wireless encryption (open authentication, no WEP/WPA). All data is transmitted in cleartext and can be captured passively by any device within radio range. HTTP sessions, credentials, emails, DNS queries, and file transfers are fully exposed without any evidence of interception.",
+    "remediation": "Enable WPA3-Personal (SAE) or WPA2-Personal (CCMP/AES). If the network is intentionally open (guest portal, public hotspot), enforce TLS for all services, enable AP client isolation, and display a legal notice. Consider 802.11u Hotspot 2.0 / Passpoint for authenticated open networks that do not require a pre-shared key.",
+    "references": [],
+    "cvss_score": 9.8,
+    "cvss_vector": "AV:A/AC:L/PR:N/UI:N/S:C/C:H/I:H/A:H"
+  },
+  {
+    "id": "AETHER-015",
+    "title": "WPS Enabled on Access Point",
+    "severity": "MEDIUM",
+    "cvss_score": 7.5,
+    "cvss_vector": "AV:A/AC:H/PR:N/UI:N/S:C/C:H/I:H/A:N",
+    "category": "WPS",
+    "description": "Wi-Fi Protected Setup (WPS) is enabled on the target AP. WPS PIN-based authentication has a fundamental design flaw: the 8-digit PIN is verified in two independent 4-digit halves, reducing the effective keyspace from 10^8 to ~11 000 attempts. Many APs are additionally vulnerable to the Pixie-Dust attack (CVE-2014-9527), which recovers the WPS PIN offline in seconds from weak nonce values. A successful WPS attack recovers the full WPA2 PSK regardless of its length or complexity.",
+    "remediation": "Disable WPS on the AP if it is not operationally required. If WPS is required, ensure the AP uses WPS 2.0 with lockout after 3 failed attempts and verify Pixie-Dust mitigation is implemented in the firmware. Apply all vendor firmware updates. Note: WPS cannot be safely enabled on APs with Broadcom or Ralink chipsets without explicit Pixie-Dust patches.",
+    "references": [
+      "CVE-2014-9527",
+      "CVE-2012-4366"
+    ]
+  },
+  {
+    "id": "AETHER-016",
+    "title": "WPA3 Transition Mode \u2014 Downgrade Attack Surface",
+    "severity": "MEDIUM",
+    "cvss_score": 7.5,
+    "cvss_vector": "AV:A/AC:H/PR:N/UI:N/S:C/C:H/I:N/A:N",
+    "category": "WPA3 Downgrade",
+    "description": "The target AP is operating in WPA3-Transition mode (WPA2/WPA3 mixed mode), simultaneously supporting both WPA2 and WPA3 clients. An attacker can deploy a rogue AP advertising only WPA2 with the same SSID. Clients configured for transition mode will connect via WPA2, exposing their 4-way handshake to standard offline dictionary cracking. This is the most practical WPA3 attack vector in real-world deployments. Tools: DragonShift, hostapd-mana.",
+    "remediation": "Migrate to WPA3-only mode when all client devices support WPA3-SAE. In the interim, enable 802.11w (PMF) as mandatory \u2014 this prevents deauthentication-based downgrade forcing. Audit which clients cannot support WPA3 and establish a remediation timeline. Consider a separate SSID for legacy WPA2 clients rather than running mixed mode on the primary SSID.",
+    "references": [
+      "CVE-2019-9494"
+    ]
+  },
+  {
+    "id": "AETHER-017",
+    "title": "WPA PMKID / EAPOL Hash Captured",
+    "severity": "HIGH",
+    "cvss_score": 6.8,
+    "cvss_vector": "AV:A/AC:H/PR:N/UI:N/S:C/C:H/I:N/A:N",
+    "category": "Wireless Authentication",
+    "description": "hcxdumptool captured a PMKID or EAPOL hash for the target SSID without requiring a connected client or deauthentication. The PMKID is derived as HMAC-SHA1(PMK, 'PMK Name' || AP_MAC || CLIENT_MAC) and is broadcast by the AP in the first EAPOL frame. The captured hash can be subjected to unlimited offline brute-force or dictionary attacks against the WPA PSK without further access to the network.",
+    "remediation": "Change the WPA PSK to a strong, randomly-generated passphrase of at least 20 characters not present in any wordlist. Enable WPA3-SAE to replace PMKID-based authentication with the Dragonfly PAKE, which is resistant to offline attacks. If WPA3 is unavailable, enforce a minimum passphrase entropy equivalent to >128 bits (20+ random characters from a large charset).",
+    "references": [
+      "Hashcat PMKID attack (2018): https://hashcat.net/forum/thread-7717.html"
+    ]
+  },
+  {
+    "id": "AETHER-018",
+    "title": "MSCHAPv2 Hash Cracked via asleap",
+    "severity": "CRITICAL",
+    "cvss_score": 8.8,
+    "cvss_vector": "AV:A/AC:L/PR:N/UI:R/S:C/C:H/I:H/A:N",
+    "category": "WPA-Enterprise / 802.1X",
+    "description": "asleap successfully cracked the MSCHAPv2 challenge/response captured by EAPHammer's rogue AP. MSCHAPv2 is inherently weak: the challenge is 56-bit DES-based and the response leaks the NT hash, which can be cracked offline in hours on consumer hardware. The recovered plaintext password can be used for pass-the-hash attacks against Windows/Active Directory resources, VPN authentication, and other services using the same credential.",
+    "remediation": "Migrate from PEAP/MSCHAPv2 to EAP-TLS with mutual certificate authentication, which is not susceptible to rogue AP credential capture. If MSCHAPv2 must remain in use, configure clients to validate the RADIUS server certificate against a pinned CA and reject connections on certificate mismatch. Immediately rotate all affected credentials and audit for unauthorized access using the cracked password.",
+    "references": [
+      "CVE-2012-2122"
     ]
   }
 ]

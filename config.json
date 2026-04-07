@@ -7,11 +7,13 @@
   "channel": null,
   "timeout_per_phase": 300,
   "phases": {
+    "wep": true,
     "wpa_handshake": true,
     "wpa_enterprise": false,
     "krack": true,
     "dragonblood_sae": true,
-    "dragonblood_drain": false
+    "dragonblood_drain": false,
+    "pmkid": true
   },
   "tools": {
     "wifite2": "wifite",
@@ -31,5 +33,12 @@
     "client_conf": "/opt/dragonslayer/client.conf",
     "hostapd_conf": "/opt/dragonslayer/hostapd.conf"
   },
-  "output_dir": "aether_output"
+  "output_dir": "aether_output",
+  "scope": {
+    "bssids": [],
+    "ssids": []
+  },
+  "hashcat_rules": [],
+  "asleap_path": "",
+  "domains": []
 }
