@@ -1781,6 +1781,26 @@ def main():
         version=VERSION,
     )
 
+    # Resolve project directory: CLI arg → absolute; relative → under clients_base;
+    # omitted → structured path from config's client_short and start_date fields.
+    import re as _re
+    if args.project:
+        _pp = Path(args.project)
+        args.project = str(_pp if _pp.is_absolute() else _clients_base() / _pp)
+    else:
+        _cs = (config.get("client_short") or "").strip()
+        _sd = (config.get("start_date") or "").strip()
+        # Use tool-specific name from TOOLS registry if this is a variant (aether-z, etc.)
+        _tool_key = os.environ.get("SPECTRE_TOOL_ID", "aether")
+        args.project = str(_build_project_dir(_cs, _sd, _tool_key))
+    _write_project_meta(
+        Path(args.project),
+        tool=os.environ.get("SPECTRE_TOOL_ID", "aether"),
+        client_short=(config.get("client_short") or ""),
+        year=((config.get("start_date") or "")[:4] or datetime.now().strftime("%Y")),
+        version=VERSION,
+    )
+
     if args.interface:
         config["interface"] = args.interface
     if args.ssids:
