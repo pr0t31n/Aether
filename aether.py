@@ -27,6 +27,7 @@ Usage:
 import argparse
 import json
 import os
+import platform
 import re
 import select
 import shutil
@@ -38,7 +39,55 @@ from datetime import datetime
 from itertools import permutations as _permutations
 from pathlib import Path
 
-VERSION = "1.3.0"
+VERSION = "1.3.2"
+
+
+def _clients_base() -> Path:
+    """Return the OS-appropriate default parent directory for client project folders."""
+    system = platform.system()
+    if system == "Windows":
+        base = Path("C:/clients")
+    elif system == "Darwin":
+        base = Path("/Users/Shared/clients")
+    else:
+        base = Path("/clients")
+    base.mkdir(parents=True, exist_ok=True)
+    return base
+
+
+def _build_project_dir(client_short: str, start_date: str, tool_name: str) -> Path:
+    """
+    Build a structured project directory:
+      <clients_base>/<client_short>/<year>/<tool_name>/<client_short>_<datetime>/
+    """
+    import re as _re
+    slug = _re.sub(r'[^\w-]', '_', (client_short or 'client').strip().lower()).strip('_') or 'client'
+    year = (start_date[:4] if start_date and len(start_date) >= 4 and start_date[:4].isdigit()
+            else datetime.now().strftime('%Y'))
+    dt_str = datetime.now().strftime('%Y%m%d_%H%M%S')
+    path = _clients_base() / slug / year / tool_name / f"{slug}_{dt_str}"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _write_project_meta(project_dir: Path, tool: str, client_short: str,
+                        year: str, version: str) -> None:
+    """Write project_meta.json so Flask apps can discover this project."""
+    import json as _json
+    try:
+        (project_dir / "project_meta.json").write_text(
+            _json.dumps({
+                "tool":         tool,
+                "client_short": client_short,
+                "year":         year,
+                "created_at":   datetime.now().isoformat(),
+                "version":      version,
+            }, indent=2),
+            encoding="utf-8",
+        )
+    except Exception:
+        pass
+
 
 # ── Findings catalogue ────────────────────────────────────────────────────────
 _catalogue: dict[str, dict] = {}
@@ -1613,7 +1662,7 @@ def run(config: dict, project: str) -> None:
 
 def parse_args():
     _default_cfg     = str(Path(__file__).parent / "config.json")
-    _default_project = f"aether_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    _default_project = ""  # computed at runtime from config fields
 
     parser = argparse.ArgumentParser(
         prog="aether",
@@ -1711,6 +1760,26 @@ def main():
     except json.JSONDecodeError as exc:
         print(f"[!] Config parse error: {exc}", file=sys.stderr)
         sys.exit(1)
+
+    # Resolve project directory: CLI arg → absolute; relative → under clients_base;
+    # omitted → structured path from config's client_short and start_date fields.
+    import re as _re
+    if args.project:
+        _pp = Path(args.project)
+        args.project = str(_pp if _pp.is_absolute() else _clients_base() / _pp)
+    else:
+        _cs = (config.get("client_short") or "").strip()
+        _sd = (config.get("start_date") or "").strip()
+        # Use tool-specific name from TOOLS registry if this is a variant (aether-z, etc.)
+        _tool_key = os.environ.get("SPECTRE_TOOL_ID", "aether")
+        args.project = str(_build_project_dir(_cs, _sd, _tool_key))
+    _write_project_meta(
+        Path(args.project),
+        tool=os.environ.get("SPECTRE_TOOL_ID", "aether"),
+        client_short=(config.get("client_short") or ""),
+        year=((config.get("start_date") or "")[:4] or datetime.now().strftime("%Y")),
+        version=VERSION,
+    )
 
     if args.interface:
         config["interface"] = args.interface
