@@ -31,6 +31,7 @@ import platform
 import re
 import select
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -51,7 +52,7 @@ import struct
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-VERSION = "1.6.1"
+VERSION = "1.6.2"
 
 
 def _clients_base() -> Path:
@@ -1989,21 +1990,37 @@ def phase_wifite(
         if merged_wl and os.path.exists(merged_wl):
             _cmd += ["--dict", merged_wl]
         _cmd += extra_args
+        wifite_deadline = timeout + 30
         try:
-            proc = _popen(_cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                          cwd=str(wifite_dir))
-            if proc.stdout is None:
-                raise RuntimeError("wifite2 stdout unavailable")
-            out_lines: list[str] = []
-            deadline = time.time() + timeout + 30
-            while True:
-                line = _readline_timed(proc.stdout, deadline)
-                if line is None:
-                    break
-                decoded = line.decode("utf-8", errors="replace").rstrip()
-                log(decoded)
-                out_lines.append(decoded)
-            _kill_proc(proc, wait_secs=10)
+            # start_new_session isolates wifite + its children (airodump-ng,
+            # aireplay-ng) into their own process group so we can kill them all
+            # reliably on timeout.  communicate() is used instead of readline()
+            # because wifite2 emits \r-terminated progress lines; readline()
+            # would block indefinitely waiting for \n.
+            proc = subprocess.Popen(
+                _cmd,
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                stdin=subprocess.DEVNULL,
+                cwd=str(wifite_dir),
+                start_new_session=True,
+            )
+            try:
+                raw_out, _ = proc.communicate(timeout=wifite_deadline)
+            except subprocess.TimeoutExpired:
+                log(f"[1b] wifite2 deadline ({wifite_deadline}s) reached — killing")
+                try:
+                    os.killpg(proc.pid, signal.SIGTERM)
+                    time.sleep(2)
+                    os.killpg(proc.pid, signal.SIGKILL)
+                except Exception:
+                    pass
+                raw_out, _ = proc.communicate()
+            out_lines = _strip_ansi(
+                raw_out.decode("utf-8", errors="replace")
+            ).splitlines()
+            for ln in out_lines:
+                if ln.strip():
+                    log(ln)
             out_file.write_text("\n".join(out_lines), encoding="utf-8")
             _parse_output(out_lines, label, out_file)
         except Exception as exc:
