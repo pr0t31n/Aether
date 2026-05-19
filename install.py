@@ -252,8 +252,8 @@ GIT_REPOS = [
         "dest":  "/opt/wifite2",
         "label": "wifite2",
         "post_cmds": [
-            # Install wifite2 so `wifite` is available in PATH
-            ["pip3", "install", "--break-system-packages", "/opt/wifite2/"],
+            ["pip3", "install", "--break-system-packages", "--ignore-installed",
+             "/opt/wifite2/"],
         ],
     },
     {
@@ -261,10 +261,13 @@ GIT_REPOS = [
         "dest":  "/opt/eaphammer",
         "label": "eaphammer",
         "post_cmds": [
-            # Install Python dependencies
-            ["pip3", "install", "--break-system-packages", "-r",
+            # requirements.txt — resolved at runtime via _find_requirements()
+            ["pip3", "install", "--break-system-packages", "--ignore-installed", "-r",
              "/opt/eaphammer/requirements.txt"],
-            # Compile hostapd-wpe and finalize setup (check=False — may warn but not fatal)
+            # pem is always needed by eaphammer --setup; install explicitly as
+            # a guard in case requirements.txt resolution found nothing.
+            ["pip3", "install", "--break-system-packages", "--ignore-installed", "pem"],
+            # Compile hostapd-wpe
             ["python3", "/opt/eaphammer/eaphammer", "--setup"],
         ],
     },
@@ -273,8 +276,7 @@ GIT_REPOS = [
         "dest":  "/opt/dragonslayer",
         "label": "dragonslayer",
         "post_cmds": [
-            # Install Scapy and other Python deps
-            ["pip3", "install", "--break-system-packages", "-r",
+            ["pip3", "install", "--break-system-packages", "--ignore-installed", "-r",
              "/opt/dragonslayer/requirements.txt"],
         ],
     },
@@ -283,7 +285,6 @@ GIT_REPOS = [
         "dest":  "/opt/dragondrain-and-time",
         "label": "dragondrain-and-time",
         "post_cmds": [
-            # Build the C dragondrain binary
             ["make", "-C", "/opt/dragondrain-and-time"],
         ],
     },
@@ -292,12 +293,28 @@ GIT_REPOS = [
         "dest":  "/opt/krackattacks-scripts",
         "label": "krackattacks-scripts",
         "post_cmds": [
-            # Install Python deps for the krackattack scripts
-            ["pip3", "install", "--break-system-packages", "-r",
+            ["pip3", "install", "--break-system-packages", "--ignore-installed", "-r",
              "/opt/krackattacks-scripts/krackattack/requirements.txt"],
         ],
     },
 ]
+
+
+def _find_requirements(dest: str, hinted_path: str) -> str | None:
+    """Locate a requirements file.
+
+    Returns hinted_path if it exists. Otherwise searches the dest directory
+    recursively for any requirements*.txt and returns the first match.
+    Returns None if nothing is found.
+    """
+    if Path(hinted_path).exists():
+        return hinted_path
+    dest_path = Path(dest)
+    if dest_path.exists():
+        for candidate in sorted(dest_path.rglob("requirements*.txt")):
+            warn(f"  Hinted path not found; using {candidate} instead")
+            return str(candidate)
+    return None
 
 
 def clone_or_update(repo: dict, dry_run: bool) -> None:
@@ -319,8 +336,24 @@ def clone_or_update(repo: dict, dry_run: bool) -> None:
             return
 
     for cmd in repo.get("post_cmds") or []:
-        info(f"{label}: post-install: {' '.join(str(c) for c in cmd)}")
-        run(cmd, dry_run=dry_run)
+        # Resolve any requirements.txt arguments at runtime — the hinted path
+        # may not match the actual repo layout.
+        resolved: list = []
+        skip = False
+        for arg in cmd:
+            if isinstance(arg, str) and arg.endswith("requirements.txt"):
+                actual = _find_requirements(dest, arg)
+                if actual is None:
+                    warn(f"{label}: no requirements file found (tried {arg}) — skipping step")
+                    skip = True
+                    break
+                resolved.append(actual)
+            else:
+                resolved.append(arg)
+        if skip:
+            continue
+        info(f"{label}: post-install: {' '.join(str(c) for c in resolved)}")
+        run(resolved, dry_run=dry_run)
 
 
 def phase_git(os_id: str, dry_run: bool) -> None:

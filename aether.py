@@ -43,7 +43,7 @@ from html.parser import HTMLParser as _HTMLParser
 from itertools import permutations as _permutations
 from pathlib import Path
 
-VERSION = "1.5.3"
+VERSION = "1.5.4"
 
 
 def _clients_base() -> Path:
@@ -270,8 +270,7 @@ def _check_injection(monitor_iface: str) -> bool:
         log("[~] aireplay-ng not found — skipping injection test")
         return True
     log(f"Testing packet injection on {monitor_iface}...")
-    out, rc = _run(["sudo", "aireplay-ng", "-9", "-e", "injectiontest",
-                    monitor_iface], timeout=30)
+    out, rc = _run(["sudo", "aireplay-ng", "-9", monitor_iface], timeout=30)
     if "Injection is working!" in out or rc == 0:
         log(f"  Injection OK on {monitor_iface}")
         return True
@@ -781,6 +780,7 @@ def enable_monitor_mode(interface: str, monitor_iface: str) -> str:
         if m:
             detected = m.group(1).strip()
             log(f"Monitor mode enabled: {detected}")
+            time.sleep(2)  # allow interface to fully settle before use
             return detected
         # Filesystem fallback
         sys_net = Path("/sys/class/net")
