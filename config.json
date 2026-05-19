@@ -13,7 +13,8 @@
     "krack": true,
     "dragonblood_sae": true,
     "dragonblood_drain": false,
-    "pmkid": true
+    "pmkid": true,
+    "deauth_handshake": true
   },
   "tools": {
     "wifite2": "wifite",
@@ -42,5 +43,7 @@
   "asleap_path": "",
   "domains": [],
   "scrape_url": "",
-  "scrape_depth": 4
+  "scrape_depth": 4,
+  "intel_scan_seconds": 45,
+  "deauth_packets": 5
 }
