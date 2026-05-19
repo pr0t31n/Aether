@@ -290,8 +290,13 @@ GIT_REPOS = [
             ["pip3", "install", "--break-system-packages", "--ignore-installed",
              "flask-cors", "flask", "twisted", "service_identity",
              "pyOpenSSL", "cryptography", "passlib", "netaddr", "pem"],
-            # Compile hostapd-wpe
-            ["python3", "/opt/eaphammer/eaphammer", "--setup"],
+            # NOTE: eaphammer --setup (hostapd-wpe compilation) is intentionally
+            # omitted here. On Python 3.13 + dnspython >= 2.4 (which ships with
+            # current Kali), eventlet's monkey-patching of the socket module
+            # conflicts with trio via dns.quic, causing an AttributeError before
+            # --setup can do anything. This is an upstream eaphammer bug. To
+            # compile hostapd-wpe manually once the conflict is resolved, run:
+            #   python3 /opt/eaphammer/eaphammer --setup
         ],
     },
     # wifite2 goes LAST so its scapy>=2.7.1rc1 overwrites any older pin.
@@ -323,17 +328,23 @@ def _find_requirements(dest: str, hinted_path: str) -> str | None:
     return None
 
 
-def _find_makefile(dest: str, hinted_dir: str) -> str | None:
-    """Locate a directory that contains a Makefile.
+_MAKEFILE_SKIP_DIRS = {"contrib", "test", "tests", "examples", "doc", "docs", ".git"}
 
-    Checks hinted_dir first, then searches dest recursively for any Makefile.
-    Returns the containing directory path, or None if none found.
+
+def _find_makefile(dest: str, hinted_dir: str) -> str | None:
+    """Locate a directory that contains a Makefile, excluding auxiliary directories.
+
+    Checks hinted_dir first, then searches dest recursively skipping contrib/,
+    test/, and similar paths that hold build-support files rather than the main tool.
+    Returns the containing directory path, or None if nothing suitable is found.
     """
     if (Path(hinted_dir) / "Makefile").exists():
         return hinted_dir
     dest_path = Path(dest)
     if dest_path.exists():
         for mf in sorted(dest_path.rglob("Makefile")):
+            if any(part in _MAKEFILE_SKIP_DIRS for part in mf.parts):
+                continue
             warn(f"  Makefile not at {hinted_dir}; building in {mf.parent} instead")
             return str(mf.parent)
     return None
@@ -397,6 +408,10 @@ def phase_git(os_id: str, dry_run: bool) -> None:
         return
     for repo in GIT_REPOS:
         clone_or_update(repo, dry_run)
+    warn("eaphammer --setup (hostapd-wpe compilation) was skipped.")
+    warn("Python 3.13 + system dnspython >= 2.4 conflict prevents it from running.")
+    warn("To compile hostapd-wpe manually after resolving the conflict:")
+    warn("  python3 /opt/eaphammer/eaphammer --setup")
     success("Git phase complete.")
 
 
