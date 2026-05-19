@@ -26,6 +26,7 @@ Usage:
 
 import argparse
 import json
+import errno
 import os
 import platform
 import re
@@ -52,7 +53,7 @@ import struct
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-VERSION = "1.6.2"
+VERSION = "1.6.3"
 
 
 def _clients_base() -> Path:
@@ -1906,6 +1907,7 @@ def phase_wifite(
     monitor_iface: str,
     target_ssids: list,
     target_bssids: list,
+    target_aps: list[dict],
     wordlist: str | None,
     output_dir: Path,
     timeout: int = 300,
@@ -1926,6 +1928,8 @@ def phase_wifite(
     wifite_dir = output_dir / "wifite"
     wifite_dir.mkdir(parents=True, exist_ok=True)
 
+    # 5GHz channels start at 36; add --5ghz so wifite scans the correct band
+    has_5ghz = any(ap.get("channel", 0) >= 36 for ap in target_aps)
     cmd = [
         "sudo", wifite_path,
         "--kill",
@@ -1936,6 +1940,8 @@ def phase_wifite(
         "--wpat",  str(min(timeout, 60)),
         "--wpadt", "10",
     ]
+    if has_5ghz:
+        cmd.append("--5ghz")
 
     def _parse_output(out_lines: list[str], ssid: str, out_file: Path) -> None:
         seen: set[str] = set()
@@ -2355,8 +2361,19 @@ def phase_krack(
     timeout: int = 180,
 ) -> None:
     if not os.path.exists(krackattacks_path):
-        log(f"[~] krackattacks-scripts not found — skipping Phase 5")
+        log("[~] krackattacks-scripts not found — skipping Phase 5")
         status("p5_krack", "Phase 5: KRACK Testing", "skipped", "not installed")
+        return
+
+    hostapd_bin = os.path.realpath(
+        os.path.join(os.path.dirname(krackattacks_path), os.pardir,
+                     "hostapd", "hostapd")
+    )
+    if not os.path.isfile(hostapd_bin):
+        log("[5] krackattacks hostapd binary not found — Phase 5 requires compiling "
+            "the bundled hostapd first")
+        log("[5]   cd /opt/krackattacks-scripts && sudo bash krackattack/compile.sh")
+        status("p5_krack", "Phase 5: KRACK Testing", "skipped", "hostapd not compiled")
         return
 
     status("p5_krack", "Phase 5: KRACK Testing", "running")
@@ -2398,7 +2415,9 @@ def phase_krack(
                     line = _readline_timed(proc.stdout, deadline)
                     if line is None:
                         break
-                    decoded = line.decode("utf-8", errors="replace").rstrip()
+                    decoded = _strip_ansi(
+                        line.decode("utf-8", errors="replace").rstrip()
+                    )
                     log(decoded)
                     out_lines.append(decoded)
                     if re.search(r'VULNERABLE|reinstalled|attack worked', decoded, re.I):
@@ -3689,6 +3708,32 @@ def phase_legacy_attacks(monitor_iface: str, target_aps: list,
     cp_dir = lg_dir / "captive_bypass"
     cp_dir.mkdir(exist_ok=True)
 
+    # Check for a usable network route before attempting outbound tests.
+    # During a monitor-mode assessment the interface has no IP, so all
+    # outbound attempts fail with ENETUNREACH — log that clearly instead
+    # of emitting a wall of FAIL lines.
+    _has_route = True
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as _rs:
+            _rs.settimeout(2)
+            _rs.connect(("1.1.1.1", 53))
+    except OSError as _re:
+        if _re.errno in (errno.ENETUNREACH, errno.EHOSTUNREACH):
+            _has_route = False
+    except Exception:
+        pass
+
+    if not _has_route:
+        log("Phase 11c: No network route available (monitor mode — no IP assigned) "
+            "— captive portal bypass tests require active network connectivity")
+        (cp_dir / "bypass_results.json").write_text(
+            json.dumps([], indent=2), encoding="utf-8"
+        )
+        status("p11_captive", "Phase 11c: Captive Portal Bypass Testing",
+               "skipped", "no route")
+        status("p11_legacy", "Phase 11: Legacy / Niche Attacks", "complete")
+        return
+
     bypass_results = []
     # These tests require outbound connectivity on some interface
     test_targets = [
@@ -3852,7 +3897,7 @@ def run(config: dict, project: str) -> None:
         if phases_cfg.get("wpa_handshake", True):
             phase_wifite(
                 active_monitor, target_ssids, effective_bssids,
-                _effective_wl, output_dir, timeout,
+                enriched_aps, _effective_wl, output_dir, timeout,
             )
 
         if phases_cfg.get("deauth_handshake", True):
