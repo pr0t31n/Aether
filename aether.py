@@ -53,7 +53,7 @@ import struct
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-VERSION = "1.6.3"
+VERSION = "1.6.4"
 
 
 def _clients_base() -> Path:
@@ -1960,7 +1960,7 @@ def phase_wifite(
                     )
             if re.search(
                 r'(?:WPA handshake:|saved.*\.cap|\.hc22000|PMKID captured'
-                r'|\[\+\].*(?:handshake|PMKID))',
+                r'|\[\+\].*(?:handshake|PMKID).*captured)',
                 line, re.I
             ):
                 title = f"WPA Handshake / PMKID Captured: {ssid}"
