@@ -53,7 +53,7 @@ import struct
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-VERSION = "1.7.1"
+VERSION = "1.7.2"
 
 
 def _clients_base() -> Path:
@@ -1536,31 +1536,11 @@ def phase_deauth_handshake(
         handshake_captured = False
         try:
             cap_proc = _popen(cap_cmd,
-                               stdout=subprocess.PIPE,
-                               stderr=subprocess.STDOUT)
+                               stdout=subprocess.DEVNULL,
+                               stderr=subprocess.DEVNULL)
             time.sleep(3)  # let capture stabilise before deauth
             _deauth_clients(monitor_iface, bssid, channel, clients, deauth_count)
-
-            # Monitor airodump output for handshake confirmation
-            deadline = time.time() + min(timeout, 90)
-            while time.time() < deadline:
-                if cap_proc.poll() is not None:
-                    break
-                if cap_proc.stdout:
-                    line = _readline_timed(cap_proc.stdout,
-                                           min(deadline, time.time() + 2))
-                    if line:
-                        decoded = _strip_ansi(
-                            line.decode("utf-8", errors="replace").rstrip()
-                        )
-                        if decoded.strip():
-                            log(decoded)
-                        if re.search(r'WPA handshake', decoded, re.I):
-                            handshake_captured = True
-                            log(f"[1c] ✓ WPA handshake captured for {ssid!r}")
-                            break
-                else:
-                    time.sleep(2)
+            time.sleep(min(timeout, 90) - 3)
         finally:
             if cap_proc is not None:
                 _kill_proc(cap_proc)
