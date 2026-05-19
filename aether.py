@@ -51,7 +51,7 @@ import struct
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-VERSION = "1.6.0"
+VERSION = "1.6.1"
 
 
 def _clients_base() -> Path:
@@ -973,34 +973,60 @@ def scan_targets(
                 try:
                     with open(csv_file, encoding="utf-8", errors="replace") as f:
                         lines = f.read().splitlines()
+                    in_sta      = False
+                    all_sta: list[dict] = []
                     for raw in lines[2:]:
                         stripped = raw.strip()
-                        if not stripped or stripped.lower().startswith("station mac"):
-                            break
+                        if not stripped:
+                            continue
+                        low = stripped.lower()
+                        if low.startswith("bssid"):
+                            in_sta = False
+                            continue
+                        if low.startswith("station mac"):
+                            in_sta = True
+                            continue
                         parts = [p.strip() for p in stripped.split(",")]
-                        if len(parts) < 14:
-                            continue
-                        bssid = parts[0]
-                        if not re.match(
-                            r'^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$', bssid
-                        ):
-                            continue
-                        channel_str = parts[3].strip()
-                        enc         = parts[5].strip()
-                        ssid        = parts[13].strip()
-                        try:
-                            ch = int(channel_str)
-                        except ValueError:
-                            ch = 0
-                        ssid_ok  = (not target_ssids)  or (ssid  in target_ssids)
-                        bssid_ok = (not target_bssids) or (
-                            bssid.upper() in [b.upper() for b in target_bssids]
-                        )
-                        if ssid_ok and bssid_ok:
-                            discovered.append({
-                                "ssid": ssid, "bssid": bssid,
-                                "channel": ch, "encryption": enc, "wps": False,
-                            })
+                        if not in_sta:
+                            if len(parts) < 14:
+                                continue
+                            bssid = parts[0]
+                            if not re.match(
+                                r'^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$', bssid
+                            ):
+                                continue
+                            channel_str = parts[3].strip()
+                            enc         = parts[5].strip()
+                            ssid        = parts[13].strip()
+                            try:
+                                ch = int(channel_str)
+                            except ValueError:
+                                ch = 0
+                            ssid_ok  = (not target_ssids)  or (ssid  in target_ssids)
+                            bssid_ok = (not target_bssids) or (
+                                bssid.upper() in [b.upper() for b in target_bssids]
+                            )
+                            if ssid_ok and bssid_ok:
+                                discovered.append({
+                                    "ssid": ssid, "bssid": bssid,
+                                    "channel": ch, "encryption": enc,
+                                    "wps": False, "clients": [],
+                                })
+                        else:
+                            if len(parts) < 6:
+                                continue
+                            mac = parts[0]
+                            if not re.match(
+                                r'^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$', mac
+                            ):
+                                continue
+                            all_sta.append({"mac": mac, "bssid": parts[5].strip()})
+                    # Link stations to their discovered APs
+                    _bssid_idx = {ap["bssid"].upper(): ap for ap in discovered}
+                    for sta in all_sta:
+                        _ab = sta["bssid"].upper()
+                        if _ab in _bssid_idx:
+                            _bssid_idx[_ab]["clients"].append({"mac": sta["mac"]})
                 except Exception as exc:
                     err(f"Scan CSV parse error: {exc}")
     else:
@@ -1305,6 +1331,52 @@ def phase_wireless_intel(
                 "signal":  sta["signal"],
                 "packets": sta["packets"],
             })
+
+    # Targeted follow-up scans for APs that still have no clients.
+    # The broad band scan may miss idle clients; a channel-locked scan focused
+    # on a single BSSID gives airodump-ng the best chance to capture sparse
+    # client traffic before handshake and deauth phases run.
+    clientless = [ap for ap in filtered if not ap["clients"] and ap["channel"]]
+    if clientless:
+        log(f"[0-I] {len(clientless)} AP(s) have no clients — running targeted follow-up scan(s)…")
+        for i, ap in enumerate(clientless):
+            log(f"[0-I] Targeted scan: {ap['ssid']!r} [{ap['bssid']}] "
+                f"ch={ap['channel']} (15s)…")
+            pfx2  = str(intel_dir / f"targeted_{i}")
+            cmd2  = [
+                "sudo", "airodump-ng",
+                "--write", pfx2, "--output-format", "csv",
+                "--bssid",   ap["bssid"],
+                "--channel", str(ap["channel"]),
+                monitor_iface,
+            ]
+            proc2 = None
+            try:
+                proc2 = _popen(cmd2, stdout=subprocess.DEVNULL,
+                               stderr=subprocess.DEVNULL)
+                time.sleep(15)
+            except Exception:
+                pass
+            finally:
+                if proc2 is not None:
+                    _kill_proc(proc2)
+            csv2 = pfx2 + "-01.csv"
+            if not os.path.exists(csv2):
+                continue
+            _, new_sta = _parse_airodump_csv_full(csv2)
+            seen_macs  = {c["mac"] for c in ap["clients"]}
+            for sta in new_sta:
+                if sta.get("bssid", "").upper() != ap["bssid"].upper():
+                    continue
+                if sta["mac"] not in seen_macs:
+                    ap["clients"].append({
+                        "mac":     sta["mac"],
+                        "signal":  sta["signal"],
+                        "packets": sta["packets"],
+                    })
+                    seen_macs.add(sta["mac"])
+            if ap["clients"]:
+                log(f"[0-I] Follow-up: {len(ap['clients'])} client(s) on {ap['bssid']}")
 
     # Score and rank APs
     for ap in filtered:
