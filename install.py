@@ -138,10 +138,24 @@ APT_PACKAGES = [
     "iw", "wireless-tools", "iproute2", "net-tools",
     # build tools (needed for dragondrain-and-time C compilation)
     "build-essential",
-    # Python Scapy for dragonslayer / krackattacks
+    # Python Scapy for dragonslayer / krackattacks + client/BTM attacks
     "python3-scapy",
     # hostapd base (eaphammer builds hostapd-wpe on top of this)
     "hostapd",
+    # hostapd-mana for KARMA/MANA attacks (Phase 6b)
+    "hostapd-mana",
+    # DHCP server for rogue AP / post-connection phases
+    "dnsmasq",
+    # Port scanning for post-connection discovery (Phase 10)
+    "nmap",
+    # ARP spoofing for post-connection MITM; dsniff provides arpspoof (Phase 10)
+    "dsniff",
+    # Deauth / beacon flooding / client confusion (Phase 7)
+    "mdk4",
+    # LLMNR/NBT-NS/MDNS poisoning for credential capture (Phase 10)
+    "responder",
+    # bettercap for KARMA fallback + ARP/MITM (Phase 6b / 10)
+    "bettercap",
     # nl80211 libs for dragonslayer
     "libnl-3-dev", "libnl-genl-3-dev",
     # build deps for C tools
@@ -154,13 +168,13 @@ DNF_PACKAGES = [
     "epel-release", "aircrack-ng", "hashcat", "reaver", "iw", "wireless-tools",
     "iproute", "net-tools", "python3-pip", "python3-devel", "git",
     "openssl-devel", "libpcap-devel", "gcc", "make",
-    "libnl3-devel",
+    "libnl3-devel", "dnsmasq", "nmap", "dsniff", "mdk4",
 ]
 
 ZYPPER_PACKAGES = [
     "aircrack-ng", "hashcat", "reaver", "iw", "wireless-tools", "iproute2",
     "net-tools", "python3-pip", "python3-devel", "git",
-    "gcc", "make", "libnl3-devel",
+    "gcc", "make", "libnl3-devel", "dnsmasq", "nmap", "dsniff",
 ]
 
 BREW_PACKAGES = ["aircrack-ng", "hashcat"]
@@ -549,6 +563,8 @@ VERIFY_TOOLS = [
     "wifite",
     # EAP attacks
     "eaphammer",
+    # rogue AP / post-connection phases
+    "hostapd", "dnsmasq", "nmap", "arpspoof", "mdk4", "responder", "bettercap",
 ]
 
 
@@ -605,7 +621,7 @@ def main() -> None:
     dry_run = args.check
 
     cprint("\n" + "=" * 60, GREEN, bold=True)
-    cprint("  Aether Installer  —  v1.5.4", GREEN, bold=True)
+    cprint("  Aether Installer  —  v1.6.0", GREEN, bold=True)
     cprint("  Wireless Penetration Testing Orchestrator", GREEN, bold=True)
     cprint("=" * 60 + "\n", GREEN, bold=True)
 

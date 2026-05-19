@@ -14,7 +14,14 @@
     "dragonblood_sae": true,
     "dragonblood_drain": false,
     "pmkid": true,
-    "deauth_handshake": true
+    "deauth_handshake": true,
+    "rogue_ap": false,
+    "karma": false,
+    "client_attacks": true,
+    "eap_downgrade": false,
+    "sae_downgrade": false,
+    "post_connection": false,
+    "legacy_attacks": true
   },
   "tools": {
     "wifite2": "wifite",
@@ -47,5 +54,24 @@
   "intel_scan_seconds": 45,
   "deauth_packets": 5,
   "client_name": "",
-  "client_short": ""
+  "client_short": "",
+  "rogue_ap": {
+    "ap_interface": "",
+    "captive_timeout": 300,
+    "deauth_assist": true,
+    "deauth_packets": 5,
+    "portal_iface_ip": "192.168.88.1",
+    "portal_subnet": "192.168.88.0/24",
+    "dhcp_range_start": "192.168.88.50",
+    "dhcp_range_end": "192.168.88.150"
+  },
+  "post_connection": {
+    "arp_poison": true,
+    "llmnr_nbns": true,
+    "port_scan": true,
+    "port_scan_targets": "",
+    "responder_timeout": 120,
+    "arp_timeout": 60,
+    "scan_timeout": 120
+  }
 }

