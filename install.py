@@ -247,28 +247,15 @@ def phase_go(dry_run: bool) -> None:
 # ---------------------------------------------------------------------------
 
 GIT_REPOS = [
+    # krackattacks pins scapy==2.6.1 — must install BEFORE wifite2 so that
+    # wifite2's scapy>=2.7.1rc1, installed last, becomes the active version.
     {
-        "url":   "https://github.com/kimocoder/wifite2",
-        "dest":  "/opt/wifite2",
-        "label": "wifite2",
+        "url":   "https://github.com/vanhoefm/krackattacks-scripts",
+        "dest":  "/opt/krackattacks-scripts",
+        "label": "krackattacks-scripts",
         "post_cmds": [
-            ["pip3", "install", "--break-system-packages", "--ignore-installed",
-             "/opt/wifite2/"],
-        ],
-    },
-    {
-        "url":   "https://github.com/s0lst1c3/eaphammer",
-        "dest":  "/opt/eaphammer",
-        "label": "eaphammer",
-        "post_cmds": [
-            # requirements.txt — resolved at runtime via _find_requirements()
             ["pip3", "install", "--break-system-packages", "--ignore-installed", "-r",
-             "/opt/eaphammer/requirements.txt"],
-            # pem is always needed by eaphammer --setup; install explicitly as
-            # a guard in case requirements.txt resolution found nothing.
-            ["pip3", "install", "--break-system-packages", "--ignore-installed", "pem"],
-            # Compile hostapd-wpe
-            ["python3", "/opt/eaphammer/eaphammer", "--setup"],
+             "/opt/krackattacks-scripts/krackattack/requirements.txt"],
         ],
     },
     {
@@ -285,16 +272,36 @@ GIT_REPOS = [
         "dest":  "/opt/dragondrain-and-time",
         "label": "dragondrain-and-time",
         "post_cmds": [
+            # Makefile may be in a subdirectory — resolved at runtime via _find_makefile().
             ["make", "-C", "/opt/dragondrain-and-time"],
         ],
     },
     {
-        "url":   "https://github.com/vanhoefm/krackattacks-scripts",
-        "dest":  "/opt/krackattacks-scripts",
-        "label": "krackattacks-scripts",
+        "url":   "https://github.com/s0lst1c3/eaphammer",
+        "dest":  "/opt/eaphammer",
+        "label": "eaphammer",
         "post_cmds": [
+            # requirements.txt — resolved at runtime via _find_requirements().
+            # If missing, the step is skipped and known deps are installed below.
             ["pip3", "install", "--break-system-packages", "--ignore-installed", "-r",
-             "/opt/krackattacks-scripts/krackattack/requirements.txt"],
+             "/opt/eaphammer/requirements.txt"],
+            # Explicit known deps — covers the case where requirements.txt is absent.
+            # flask-cors is the first thing eaphammer imports; omitting it aborts --setup.
+            ["pip3", "install", "--break-system-packages", "--ignore-installed",
+             "flask-cors", "flask", "twisted", "service_identity",
+             "pyOpenSSL", "cryptography", "passlib", "netaddr", "pem"],
+            # Compile hostapd-wpe
+            ["python3", "/opt/eaphammer/eaphammer", "--setup"],
+        ],
+    },
+    # wifite2 goes LAST so its scapy>=2.7.1rc1 overwrites any older pin.
+    {
+        "url":   "https://github.com/kimocoder/wifite2",
+        "dest":  "/opt/wifite2",
+        "label": "wifite2",
+        "post_cmds": [
+            ["pip3", "install", "--break-system-packages", "--ignore-installed",
+             "/opt/wifite2/"],
         ],
     },
 ]
@@ -303,9 +310,8 @@ GIT_REPOS = [
 def _find_requirements(dest: str, hinted_path: str) -> str | None:
     """Locate a requirements file.
 
-    Returns hinted_path if it exists. Otherwise searches the dest directory
-    recursively for any requirements*.txt and returns the first match.
-    Returns None if nothing is found.
+    Returns hinted_path if it exists. Otherwise searches dest recursively for
+    any requirements*.txt and returns the first match. Returns None if nothing found.
     """
     if Path(hinted_path).exists():
         return hinted_path
@@ -314,6 +320,22 @@ def _find_requirements(dest: str, hinted_path: str) -> str | None:
         for candidate in sorted(dest_path.rglob("requirements*.txt")):
             warn(f"  Hinted path not found; using {candidate} instead")
             return str(candidate)
+    return None
+
+
+def _find_makefile(dest: str, hinted_dir: str) -> str | None:
+    """Locate a directory that contains a Makefile.
+
+    Checks hinted_dir first, then searches dest recursively for any Makefile.
+    Returns the containing directory path, or None if none found.
+    """
+    if (Path(hinted_dir) / "Makefile").exists():
+        return hinted_dir
+    dest_path = Path(dest)
+    if dest_path.exists():
+        for mf in sorted(dest_path.rglob("Makefile")):
+            warn(f"  Makefile not at {hinted_dir}; building in {mf.parent} instead")
+            return str(mf.parent)
     return None
 
 
@@ -336,22 +358,34 @@ def clone_or_update(repo: dict, dry_run: bool) -> None:
             return
 
     for cmd in repo.get("post_cmds") or []:
-        # Resolve any requirements.txt arguments at runtime — the hinted path
-        # may not match the actual repo layout.
-        resolved: list = []
+        resolved: list = list(cmd)
         skip = False
-        for arg in cmd:
+
+        # Resolve requirements.txt paths — hinted path may not match actual layout.
+        for i, arg in enumerate(resolved):
             if isinstance(arg, str) and arg.endswith("requirements.txt"):
                 actual = _find_requirements(dest, arg)
                 if actual is None:
                     warn(f"{label}: no requirements file found (tried {arg}) — skipping step")
                     skip = True
                     break
-                resolved.append(actual)
-            else:
-                resolved.append(arg)
+                resolved[i] = actual
         if skip:
             continue
+
+        # Resolve make -C <dir> — the Makefile may be in a subdirectory.
+        if resolved and resolved[0] == "make" and "-C" in resolved:
+            ci = resolved.index("-C")
+            if ci + 1 < len(resolved):
+                actual_dir = _find_makefile(dest, resolved[ci + 1])
+                if actual_dir is None:
+                    warn(f"{label}: no Makefile found under {dest} — skipping build")
+                    skip = True
+                else:
+                    resolved[ci + 1] = actual_dir
+        if skip:
+            continue
+
         info(f"{label}: post-install: {' '.join(str(c) for c in resolved)}")
         run(resolved, dry_run=dry_run)
 
@@ -556,7 +590,7 @@ def main() -> None:
     dry_run = args.check
 
     cprint("\n" + "=" * 60, GREEN, bold=True)
-    cprint("  Aether Installer  —  v1.5.2", GREEN, bold=True)
+    cprint("  Aether Installer  —  v1.5.4", GREEN, bold=True)
     cprint("  Wireless Penetration Testing Orchestrator", GREEN, bold=True)
     cprint("=" * 60 + "\n", GREEN, bold=True)
 
