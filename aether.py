@@ -53,7 +53,7 @@ import struct
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-VERSION = "1.7.3"
+VERSION = "1.7.4"
 
 
 def _clients_base() -> Path:
@@ -2578,10 +2578,18 @@ def _select_ap_channel(ap_iface: str, preferred: int) -> int:
     """Return a channel allowed for AP mode on ap_iface, nearest to preferred.
 
     Queries iw for the regulatory-allowed channel list on the interface's phy
-    and filters out channels flagged NO-IR or disabled.  Falls back to preferred
-    (letting hostapd surface the real error) if iw is unavailable or parsing
-    fails.
+    and filters out channels flagged NO-IR, disabled, or passive-only.
+    Handles both single-line flags (* 5180 MHz [36] (no IR)) and continuation
+    lines where flags appear on the line(s) after the frequency entry.
+    Falls back to a hardcoded UNII-3 preference for 5 GHz when iw parsing
+    yields no usable channels.
     """
+    _BAD = ('no ir', 'disabled', 'passive')
+
+    def _is_bad(flags: str) -> bool:
+        fl = flags.lower()
+        return any(b in fl for b in _BAD)
+
     if not shutil.which("iw"):
         return preferred
 
@@ -2593,30 +2601,60 @@ def _select_ap_channel(ap_iface: str, preferred: int) -> int:
 
     list_out, _ = _run(["iw", "list"], timeout=10)
     allowed: set[int] = set()
-    in_phy   = False
-    in_freqs = False
+    in_phy    = False
+    in_freqs  = False
+    cur_chan: int | None = None
+    cur_flags = ""
+
+    def _commit() -> None:
+        nonlocal cur_chan, cur_flags
+        if cur_chan is not None and not _is_bad(cur_flags):
+            allowed.add(cur_chan)
+        cur_chan  = None
+        cur_flags = ""
 
     for line in list_out.splitlines():
-        if re.match(r'^Wiphy\s+', line):
-            in_phy   = line.strip().endswith(phy)
+        # Top-level Wiphy header — no leading whitespace
+        wm = re.match(r'^Wiphy\s+(\S+)', line)
+        if wm:
+            _commit()
+            in_phy   = (wm.group(1) == phy)
             in_freqs = False
             continue
         if not in_phy:
             continue
         if 'Frequencies:' in line:
+            _commit()
             in_freqs = True
             continue
-        if in_freqs:
-            if line and not line[0].isspace():
-                in_freqs = False
-                continue
-            fm = re.search(r'\* (\d+) MHz \[(\d+)\](.*)', line)
-            if fm:
-                flags = fm.group(3).lower()
-                if 'no ir' not in flags and 'disabled' not in flags:
-                    allowed.add(int(fm.group(2)))
+        if not in_freqs:
+            continue
+        # Leaving the Wiphy block entirely (unindented line)
+        if line and not line[0].isspace():
+            _commit()
+            in_freqs = False
+            continue
+        fm = re.search(r'\* (\d+) MHz \[(\d+)\](.*)', line)
+        if fm:
+            _commit()
+            cur_chan  = int(fm.group(2))
+            cur_flags = fm.group(3)
+        elif cur_chan is not None:
+            # Continuation line with extra flags (e.g. "(no IR)" on its own line)
+            cur_flags += ' ' + line
 
-    if not allowed or preferred in allowed:
+    _commit()
+
+    if not allowed:
+        # iw parsing failed or adapter has no usable channels in its list.
+        # Hard-code a UNII-3 preference for 5 GHz as a last resort.
+        if preferred >= 36:
+            log(f"[~] _select_ap_channel: iw parse yielded no allowed channels "
+                f"for {ap_iface} — trying UNII-3 fallback (ch 149)")
+            return 149
+        return preferred
+
+    if preferred in allowed:
         return preferred
 
     is_5g   = preferred >= 36
