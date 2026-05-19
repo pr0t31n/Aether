@@ -43,7 +43,7 @@ from html.parser import HTMLParser as _HTMLParser
 from itertools import permutations as _permutations
 from pathlib import Path
 
-VERSION = "1.5.2"
+VERSION = "1.5.3"
 
 
 def _clients_base() -> Path:
@@ -763,11 +763,21 @@ def enable_monitor_mode(interface: str, monitor_iface: str) -> str:
     if shutil.which("airmon-ng"):
         _run(["sudo", "airmon-ng", "check", "kill"])
         out, _ = _run(["sudo", "airmon-ng", "start", interface])
+        # Pass 1 — newer airmon-ng format:
+        #   "monitor mode vif enabled for [phy0]wlan0 on [phy0]wlan0mon"
+        # The monitor vif is the token AFTER the second "on [phy0]".
         m = re.search(
-            r'(?:monitor\s+mode(?:\s+vif)?\s+enabled(?:\s+on)?'
-            r'|enabled\s+on)\s+([\w-]+)',
+            r'enabled\s+(?:for|on)\s+(?:\[[^\]]*\])?\S+\s+on\s+(?:\[[^\]]*\])?(\w[\w-]*)',
             out, re.I,
         )
+        if not m:
+            # Pass 2 — older airmon-ng format:
+            #   "monitor mode enabled on wlan0mon"
+            #   "monitor mode enabled for wlan0mon"
+            m = re.search(
+                r'enabled\s+(?:for|on)\s+(?:\[[^\]]*\])?(\w[\w-]*)',
+                out, re.I,
+            )
         if m:
             detected = m.group(1).strip()
             log(f"Monitor mode enabled: {detected}")
