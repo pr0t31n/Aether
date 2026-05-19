@@ -1851,7 +1851,8 @@ def phase_wifite(
         "--wps",
         "--pmkid",
         "-i", monitor_iface,
-        "--wpa-handshake-timeout", str(min(timeout, 60)),
+        "--wpat",  str(min(timeout, 60)),
+        "--wpadt", "10",
     ]
 
     def _parse_output(out_lines: list[str], ssid: str, out_file: Path) -> None:
