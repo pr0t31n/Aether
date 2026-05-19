@@ -35,11 +35,15 @@ import subprocess
 import sys
 import tempfile
 import time
+import urllib.error
+import urllib.parse
+import urllib.request
 from datetime import datetime
+from html.parser import HTMLParser as _HTMLParser
 from itertools import permutations as _permutations
 from pathlib import Path
 
-VERSION = "1.3.2"
+VERSION = "1.4.0"
 
 
 def _clients_base() -> Path:
@@ -455,6 +459,300 @@ def _build_domain_wordlist(domains: list[str], base_wordlist: str | None) -> str
         return tmp.name
     except Exception as exc:
         err(f"Domain wordlist generation failed: {exc}")
+        return base_wordlist
+
+
+# ── Website wordlist builder ──────────────────────────────────────────────────
+
+_STOP_WORDS: frozenset = frozenset({
+    "a", "an", "the", "and", "or", "but", "if", "in", "on", "at", "to",
+    "for", "of", "with", "by", "from", "up", "about", "into", "through",
+    "is", "are", "was", "were", "be", "been", "being", "have", "has", "had",
+    "do", "does", "did", "will", "would", "could", "should", "may", "might",
+    "can", "this", "that", "these", "those", "it", "its", "we", "you", "he",
+    "she", "they", "them", "their", "our", "your", "my", "his", "her", "all",
+    "as", "so", "no", "not", "also", "than", "then", "when", "where", "who",
+    "which", "what", "how", "why", "more", "most", "some", "any", "each",
+    "both", "few", "other", "such", "very", "just", "new", "one", "two",
+    "three", "four", "five", "six", "seven", "eight", "nine", "ten",
+    "get", "got", "use", "used", "using", "see", "make", "made", "go",
+    "come", "back", "first", "last", "only", "same", "good", "much",
+    "i", "me", "us", "www", "http", "https", "html", "css", "php",
+})
+
+_MONTH_ABBRV = ("", "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+_MONTH_NAMES = ("", "January", "February", "March", "April", "May", "June",
+                "July", "August", "September", "October", "November", "December")
+_MONTH_MAP = {
+    "january":1,  "jan":1,  "february":2, "feb":2,  "march":3,   "mar":3,
+    "april":4,    "apr":4,  "may":5,       "june":6, "jun":6,     "july":7,
+    "jul":7,      "august":8,"aug":8,      "september":9, "sep":9, "sept":9,
+    "october":10, "oct":10, "november":11, "nov":11, "december":12,"dec":12,
+}
+
+
+def _expand_date(year: int, month: int, day: int) -> set:
+    """Return a set of password-style strings representing a calendar date."""
+    yy   = f"{year % 100:02d}"
+    yyyy = f"{year:04d}"
+    mm   = f"{month:02d}"
+    dd   = f"{day:02d}"
+    mn   = _MONTH_ABBRV[month]
+    mf   = _MONTH_NAMES[month]
+    return {
+        f"{dd}{mm}{yy}", f"{dd}{mm}{yyyy}",
+        f"{mm}{dd}{yy}", f"{mm}{dd}{yyyy}",
+        f"{yyyy}{mm}{dd}", f"{yy}{mm}{dd}",
+        f"{dd}-{mm}-{yy}", f"{dd}/{mm}/{yyyy}",
+        f"{mm}-{dd}-{yy}", f"{mm}/{dd}/{yyyy}",
+        f"{yyyy}-{mm}-{dd}",
+        f"{mn}{dd}", f"{mn}{yy}", f"{mn}{yyyy}",
+        f"{mn}{dd}{yy}", f"{mn}{dd}{yyyy}",
+        f"{dd}{mn}", f"{dd}{mn}{yy}", f"{dd}{mn}{yyyy}",
+        f"{mf}{dd}", f"{mf}{yyyy}", f"{mf}{dd}{yyyy}",
+        yyyy, yy, dd, mm,
+    }
+
+
+def _detect_dates(text: str) -> list:
+    """Find date patterns in text; return list of (year, month, day) tuples."""
+    results = []
+    # ISO: 2026-05-19 or 2026/05/19
+    for m in re.finditer(r'\b((?:19|20)\d{2})[-/](\d{1,2})[-/](\d{1,2})\b', text):
+        try:
+            y, mo, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
+            if 1 <= mo <= 12 and 1 <= d <= 31:
+                results.append((y, mo, d))
+        except ValueError:
+            pass
+    # US short: 05/19/2026 or 5-19-26
+    for m in re.finditer(r'\b(\d{1,2})[-/](\d{1,2})[-/]((?:19|20)?\d{2})\b', text):
+        try:
+            mo, d, y = int(m.group(1)), int(m.group(2)), int(m.group(3))
+            if y < 100:
+                y += 2000
+            if 1 <= mo <= 12 and 1 <= d <= 31 and 1900 <= y <= 2050:
+                results.append((y, mo, d))
+        except ValueError:
+            pass
+    # Written: "May 19, 2026" or "19 May 2026"
+    _mp = (r'(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?'
+           r'|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)')
+    for m in re.finditer(rf'\b({_mp})\s+(\d{{1,2}})(?:st|nd|rd|th)?,?\s+((?:19|20)\d{{2}})\b',
+                         text, re.IGNORECASE):
+        mo = _MONTH_MAP.get(m.group(1).lower()[:3])
+        if mo:
+            try:
+                results.append((int(m.group(3)), mo, int(m.group(2))))
+            except ValueError:
+                pass
+    for m in re.finditer(rf'\b(\d{{1,2}})(?:st|nd|rd|th)?\s+({_mp})\s+((?:19|20)\d{{2}})\b',
+                         text, re.IGNORECASE):
+        mo = _MONTH_MAP.get(m.group(2).lower()[:3])
+        if mo:
+            try:
+                results.append((int(m.group(3)), mo, int(m.group(1))))
+            except ValueError:
+                pass
+    return list({(y, mo, d) for y, mo, d in results if 1900 <= y <= 2050})
+
+
+class _TextLinkParser(_HTMLParser):
+    """Single-pass HTML parser that extracts visible text and same-domain hrefs."""
+    _SKIP_TAGS: frozenset = frozenset({
+        "script", "style", "noscript", "svg", "path", "head",
+        "code", "pre", "iframe", "object", "embed",
+    })
+
+    def __init__(self, base_url: str) -> None:
+        super().__init__(convert_charrefs=True)
+        self._skip: int = 0
+        self._base = base_url
+        self._base_parsed = urllib.parse.urlparse(base_url)
+        self.texts: list = []
+        self.links: set = set()
+
+    def handle_starttag(self, tag: str, attrs) -> None:
+        if tag in self._SKIP_TAGS:
+            self._skip += 1
+        amap = dict(attrs)
+        for attr in ("alt", "title", "placeholder", "aria-label"):
+            if amap.get(attr):
+                self.texts.append(amap[attr])
+        href = amap.get("href", "")
+        if href and not href.startswith(("#", "javascript:", "mailto:", "tel:")):
+            abs_url = urllib.parse.urljoin(self._base, href)
+            p = urllib.parse.urlparse(abs_url)
+            if (p.netloc == self._base_parsed.netloc
+                    and p.scheme in ("http", "https")):
+                self.links.add(urllib.parse.urlunparse(
+                    (p.scheme, p.netloc, p.path, "", "", "")))
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag in self._SKIP_TAGS:
+            self._skip = max(0, self._skip - 1)
+
+    def handle_data(self, data: str) -> None:
+        if self._skip == 0 and data.strip():
+            self.texts.append(data)
+
+
+def _scrape_site(url: str, max_depth: int, max_pages: int = 80) -> tuple:
+    """Crawl url up to max_depth levels within the same domain.
+    Returns (word_set: set[str], dates: list[tuple]).
+    """
+    visited: set = set()
+    queue: list = [(url.rstrip("/"), 0)]
+    all_texts: list = []
+
+    while queue and len(visited) < max_pages:
+        cur, depth = queue.pop(0)
+        if cur in visited:
+            continue
+        visited.add(cur)
+        log(f"  [scrape] {cur} (depth {depth})")
+        try:
+            req = urllib.request.Request(
+                cur,
+                headers={"User-Agent": "pr0t31n-wordlist/1.0 (+assessment)"},
+            )
+            with urllib.request.urlopen(req, timeout=12) as resp:
+                ct = resp.headers.get("Content-Type", "")
+                if "text/html" not in ct:
+                    continue
+                body = resp.read(1_500_000).decode("utf-8", errors="replace")
+        except Exception as exc:
+            err(f"  [scrape] {cur}: {exc}")
+            continue
+
+        parser = _TextLinkParser(cur)
+        try:
+            parser.feed(body)
+        except Exception:
+            pass
+        all_texts.extend(parser.texts)
+
+        if depth < max_depth:
+            for link in parser.links:
+                if link not in visited:
+                    queue.append((link, depth + 1))
+
+    log(f"  [scrape] Crawled {len(visited)} page(s)")
+    joined = " ".join(all_texts)
+
+    words: set = set()
+    for raw in re.findall(r"[a-zA-Z][a-zA-Z0-9]{2,}", joined):
+        w = raw.lower()
+        if len(w) >= 3 and w not in _STOP_WORDS:
+            words.add(w)
+
+    dates = _detect_dates(joined)
+    return words, dates
+
+
+def _build_website_wordlist(url: str, max_depth: int,
+                             base_wordlist: str | None) -> str | None:
+    """Crawl a website and build a password-candidate wordlist from its content.
+
+    Words are extracted from all visible text, filtered for stop words,
+    then expanded via case mutations, date representations, pairwise
+    combinations (sep variants), and 3-word permutations.  The result is
+    written to a temp file that extends base_wordlist.
+    """
+    if not url:
+        return base_wordlist
+
+    log(f"Website wordlist: scraping {url} (max depth {max_depth})…")
+    try:
+        words, dates = _scrape_site(url, max(1, min(7, max_depth)))
+    except Exception as exc:
+        err(f"Website scrape error: {exc}")
+        return base_wordlist
+
+    if not words:
+        log("  [scrape] No usable words extracted")
+        return base_wordlist
+
+    log(f"  [scrape] {len(words)} unique words, {len(dates)} date(s)")
+
+    seen: set = set()
+    candidates: list = []
+
+    def _add(w: str) -> None:
+        if w and w not in seen and 8 <= len(w) <= 63:
+            seen.add(w)
+            candidates.append(w)
+
+    # Single-word mutations
+    word_list = sorted(words)
+    for w in word_list:
+        for v in (w, w.capitalize(), w.upper()):
+            _add(v)
+
+    # Date expansions
+    date_strs: set = set()
+    for (y, mo, d) in dates:
+        date_strs.update(_expand_date(y, mo, d))
+    for ds in date_strs:
+        _add(ds)
+        for sfx in ("!", "@", "1", "123"):
+            _add(ds + sfx)
+
+    # Words + dates
+    for w in word_list[:40]:
+        for ds in list(date_strs)[:25]:
+            _add(w + ds)
+            _add(w.capitalize() + ds)
+            _add(ds + w)
+
+    # Pairwise combinations
+    cap2 = word_list[:50]
+    seps = ("", "-", "_", ".")
+    for i, w1 in enumerate(cap2):
+        for w2 in cap2:
+            if w1 >= w2:
+                continue
+            for sep in seps:
+                _add(w1 + sep + w2)
+                _add(w1.capitalize() + sep + w2.capitalize())
+                _add(w2 + sep + w1)
+        if i >= 29:
+            break
+
+    # 3-word permutations (tightly capped to avoid explosion)
+    cap3 = word_list[:20]
+    for i, w1 in enumerate(cap3):
+        for j, w2 in enumerate(cap3):
+            if j <= i:
+                continue
+            for w3 in cap3:
+                if w3 in (w1, w2):
+                    continue
+                _add(w1 + w2 + w3)
+                _add(w1.capitalize() + w2.capitalize() + w3.capitalize())
+                _add(w1 + "-" + w2 + "-" + w3)
+
+    log(f"  Website wordlist: {len(candidates)} candidate passwords")
+
+    try:
+        tmp = tempfile.NamedTemporaryFile(
+            mode="w", suffix="-web.txt", delete=False, encoding="utf-8",
+        )
+        for w in candidates:
+            tmp.write(w + "\n")
+        if base_wordlist and os.path.exists(base_wordlist):
+            with open(base_wordlist, encoding="utf-8", errors="replace") as bf:
+                for line in bf:
+                    line = line.rstrip("\n")
+                    if 8 <= len(line) <= 63 and line not in seen:
+                        seen.add(line)
+                        tmp.write(line + "\n")
+        tmp.close()
+        log(f"  Website wordlist saved → {tmp.name}")
+        return tmp.name
+    except Exception as exc:
+        err(f"Website wordlist write failed: {exc}")
         return base_wordlist
 
 
@@ -1538,6 +1836,8 @@ def run(config: dict, project: str) -> None:
     scan_channel  = config.get("scan_channel")
     hashcat_rules = config.get("hashcat_rules", [])
     asleap_path   = config.get("asleap_path", "")
+    scrape_url    = (config.get("scrape_url") or "").strip()
+    scrape_depth  = int(config.get("scrape_depth", 4))
 
     # Scope enforcement
     scope_cfg    = config.get("scope", {})
@@ -1561,8 +1861,14 @@ def run(config: dict, project: str) -> None:
         err(f"Aborting: interface '{interface}' not available.")
         return
 
-    # Build domain-derived wordlist (merged with base wordlist) before phases start
-    _effective_wl = _build_domain_wordlist(domains, wordlist)
+    # Build wordlists before phases start (website scrape → domain derivation → base)
+    _effective_wl = wordlist
+    if scrape_url:
+        _scraped = _build_website_wordlist(scrape_url, scrape_depth, _effective_wl)
+        if _scraped:
+            log(f"Website wordlist active: {_scraped}")
+            _effective_wl = _scraped
+    _effective_wl = _build_domain_wordlist(domains, _effective_wl)
     if _effective_wl and _effective_wl != wordlist:
         log(f"Domain wordlist active: {_effective_wl}")
 
@@ -1760,6 +2066,166 @@ def main():
     except json.JSONDecodeError as exc:
         print(f"[!] Config parse error: {exc}", file=sys.stderr)
         sys.exit(1)
+
+    # Resolve project directory: CLI arg → absolute; relative → under clients_base;
+    # omitted → structured path from config's client_short and start_date fields.
+    import re as _re
+    if args.project:
+        _pp = Path(args.project)
+        args.project = str(_pp if _pp.is_absolute() else _clients_base() / _pp)
+    else:
+        _cs = (config.get("client_short") or "").strip()
+        _sd = (config.get("start_date") or "").strip()
+        # Use tool-specific name from TOOLS registry if this is a variant (aether-z, etc.)
+        _tool_key = os.environ.get("SPECTRE_TOOL_ID", "aether")
+        args.project = str(_build_project_dir(_cs, _sd, _tool_key))
+    _write_project_meta(
+        Path(args.project),
+        tool=os.environ.get("SPECTRE_TOOL_ID", "aether"),
+        client_short=(config.get("client_short") or ""),
+        year=((config.get("start_date") or "")[:4] or datetime.now().strftime("%Y")),
+        version=VERSION,
+    )
+
+    # Resolve project directory: CLI arg → absolute; relative → under clients_base;
+    # omitted → structured path from config's client_short and start_date fields.
+    import re as _re
+    if args.project:
+        _pp = Path(args.project)
+        args.project = str(_pp if _pp.is_absolute() else _clients_base() / _pp)
+    else:
+        _cs = (config.get("client_short") or "").strip()
+        _sd = (config.get("start_date") or "").strip()
+        # Use tool-specific name from TOOLS registry if this is a variant (aether-z, etc.)
+        _tool_key = os.environ.get("SPECTRE_TOOL_ID", "aether")
+        args.project = str(_build_project_dir(_cs, _sd, _tool_key))
+    _write_project_meta(
+        Path(args.project),
+        tool=os.environ.get("SPECTRE_TOOL_ID", "aether"),
+        client_short=(config.get("client_short") or ""),
+        year=((config.get("start_date") or "")[:4] or datetime.now().strftime("%Y")),
+        version=VERSION,
+    )
+
+    # Resolve project directory: CLI arg → absolute; relative → under clients_base;
+    # omitted → structured path from config's client_short and start_date fields.
+    import re as _re
+    if args.project:
+        _pp = Path(args.project)
+        args.project = str(_pp if _pp.is_absolute() else _clients_base() / _pp)
+    else:
+        _cs = (config.get("client_short") or "").strip()
+        _sd = (config.get("start_date") or "").strip()
+        # Use tool-specific name from TOOLS registry if this is a variant (aether-z, etc.)
+        _tool_key = os.environ.get("SPECTRE_TOOL_ID", "aether")
+        args.project = str(_build_project_dir(_cs, _sd, _tool_key))
+    _write_project_meta(
+        Path(args.project),
+        tool=os.environ.get("SPECTRE_TOOL_ID", "aether"),
+        client_short=(config.get("client_short") or ""),
+        year=((config.get("start_date") or "")[:4] or datetime.now().strftime("%Y")),
+        version=VERSION,
+    )
+
+    # Resolve project directory: CLI arg → absolute; relative → under clients_base;
+    # omitted → structured path from config's client_short and start_date fields.
+    import re as _re
+    if args.project:
+        _pp = Path(args.project)
+        args.project = str(_pp if _pp.is_absolute() else _clients_base() / _pp)
+    else:
+        _cs = (config.get("client_short") or "").strip()
+        _sd = (config.get("start_date") or "").strip()
+        # Use tool-specific name from TOOLS registry if this is a variant (aether-z, etc.)
+        _tool_key = os.environ.get("SPECTRE_TOOL_ID", "aether")
+        args.project = str(_build_project_dir(_cs, _sd, _tool_key))
+    _write_project_meta(
+        Path(args.project),
+        tool=os.environ.get("SPECTRE_TOOL_ID", "aether"),
+        client_short=(config.get("client_short") or ""),
+        year=((config.get("start_date") or "")[:4] or datetime.now().strftime("%Y")),
+        version=VERSION,
+    )
+
+    # Resolve project directory: CLI arg → absolute; relative → under clients_base;
+    # omitted → structured path from config's client_short and start_date fields.
+    import re as _re
+    if args.project:
+        _pp = Path(args.project)
+        args.project = str(_pp if _pp.is_absolute() else _clients_base() / _pp)
+    else:
+        _cs = (config.get("client_short") or "").strip()
+        _sd = (config.get("start_date") or "").strip()
+        # Use tool-specific name from TOOLS registry if this is a variant (aether-z, etc.)
+        _tool_key = os.environ.get("SPECTRE_TOOL_ID", "aether")
+        args.project = str(_build_project_dir(_cs, _sd, _tool_key))
+    _write_project_meta(
+        Path(args.project),
+        tool=os.environ.get("SPECTRE_TOOL_ID", "aether"),
+        client_short=(config.get("client_short") or ""),
+        year=((config.get("start_date") or "")[:4] or datetime.now().strftime("%Y")),
+        version=VERSION,
+    )
+
+    # Resolve project directory: CLI arg → absolute; relative → under clients_base;
+    # omitted → structured path from config's client_short and start_date fields.
+    import re as _re
+    if args.project:
+        _pp = Path(args.project)
+        args.project = str(_pp if _pp.is_absolute() else _clients_base() / _pp)
+    else:
+        _cs = (config.get("client_short") or "").strip()
+        _sd = (config.get("start_date") or "").strip()
+        # Use tool-specific name from TOOLS registry if this is a variant (aether-z, etc.)
+        _tool_key = os.environ.get("SPECTRE_TOOL_ID", "aether")
+        args.project = str(_build_project_dir(_cs, _sd, _tool_key))
+    _write_project_meta(
+        Path(args.project),
+        tool=os.environ.get("SPECTRE_TOOL_ID", "aether"),
+        client_short=(config.get("client_short") or ""),
+        year=((config.get("start_date") or "")[:4] or datetime.now().strftime("%Y")),
+        version=VERSION,
+    )
+
+    # Resolve project directory: CLI arg → absolute; relative → under clients_base;
+    # omitted → structured path from config's client_short and start_date fields.
+    import re as _re
+    if args.project:
+        _pp = Path(args.project)
+        args.project = str(_pp if _pp.is_absolute() else _clients_base() / _pp)
+    else:
+        _cs = (config.get("client_short") or "").strip()
+        _sd = (config.get("start_date") or "").strip()
+        # Use tool-specific name from TOOLS registry if this is a variant (aether-z, etc.)
+        _tool_key = os.environ.get("SPECTRE_TOOL_ID", "aether")
+        args.project = str(_build_project_dir(_cs, _sd, _tool_key))
+    _write_project_meta(
+        Path(args.project),
+        tool=os.environ.get("SPECTRE_TOOL_ID", "aether"),
+        client_short=(config.get("client_short") or ""),
+        year=((config.get("start_date") or "")[:4] or datetime.now().strftime("%Y")),
+        version=VERSION,
+    )
+
+    # Resolve project directory: CLI arg → absolute; relative → under clients_base;
+    # omitted → structured path from config's client_short and start_date fields.
+    import re as _re
+    if args.project:
+        _pp = Path(args.project)
+        args.project = str(_pp if _pp.is_absolute() else _clients_base() / _pp)
+    else:
+        _cs = (config.get("client_short") or "").strip()
+        _sd = (config.get("start_date") or "").strip()
+        # Use tool-specific name from TOOLS registry if this is a variant (aether-z, etc.)
+        _tool_key = os.environ.get("SPECTRE_TOOL_ID", "aether")
+        args.project = str(_build_project_dir(_cs, _sd, _tool_key))
+    _write_project_meta(
+        Path(args.project),
+        tool=os.environ.get("SPECTRE_TOOL_ID", "aether"),
+        client_short=(config.get("client_short") or ""),
+        year=((config.get("start_date") or "")[:4] or datetime.now().strftime("%Y")),
+        version=VERSION,
+    )
 
     # Resolve project directory: CLI arg → absolute; relative → under clients_base;
     # omitted → structured path from config's client_short and start_date fields.

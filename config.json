@@ -40,5 +40,7 @@
   },
   "hashcat_rules": [],
   "asleap_path": "",
-  "domains": []
+  "domains": [],
+  "scrape_url": "",
+  "scrape_depth": 4
 }
