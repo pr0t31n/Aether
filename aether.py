@@ -790,42 +790,51 @@ def _build_website_wordlist(url: str, max_depth: int,
 
 def enable_monitor_mode(interface: str, monitor_iface: str) -> str:
     log(f"Enabling monitor mode on {interface}...")
+    sys_net = Path("/sys/class/net")
+
+    def _net_ifaces() -> set:
+        return {p.name for p in sys_net.iterdir()} if sys_net.exists() else set()
+
+    def _is_monitor(name: str) -> bool:
+        try:
+            return (sys_net / name / "type").read_text().strip() == "803"
+        except Exception:
+            return False
+
     if shutil.which("airmon-ng"):
+        pre = _net_ifaces()
         _run(["sudo", "airmon-ng", "check", "kill"])
         out, _ = _run(["sudo", "airmon-ng", "start", interface])
-        # Pass 1 — newer airmon-ng format:
-        #   "monitor mode vif enabled for [phy0]wlan0 on [phy0]wlan0mon"
-        # The monitor vif is the token AFTER the second "on [phy0]".
-        m = re.search(
-            r'enabled\s+(?:for|on)\s+(?:\[[^\]]*\])?\S+\s+on\s+(?:\[[^\]]*\])?(\w[\w-]*)',
-            out, re.I,
-        )
-        if not m:
-            # Pass 2 — older airmon-ng format:
-            #   "monitor mode enabled on wlan0mon"
-            #   "monitor mode enabled for wlan0mon"
-            m = re.search(
-                r'enabled\s+(?:for|on)\s+(?:\[[^\]]*\])?(\w[\w-]*)',
-                out, re.I,
-            )
-        if m:
-            detected = m.group(1).strip()
-            log(f"Monitor mode enabled: {detected}")
-            time.sleep(2)  # allow interface to fully settle before use
-            return detected
-        # Filesystem fallback
-        sys_net = Path("/sys/class/net")
-        if sys_net.exists():
-            candidates = [
-                p.name for p in sys_net.iterdir()
-                if "mon" in p.name.lower() and p.name != interface
-            ]
-            if candidates:
-                detected = candidates[0]
-                log(f"Monitor interface via /sys: {detected}")
+        time.sleep(2)
+        post = _net_ifaces()
+
+        # Primary: newly-appeared interface confirmed in monitor mode via sysfs
+        for name in sorted(post - pre):
+            if _is_monitor(name):
+                log(f"Monitor mode enabled: {name}")
+                return name
+
+        # Secondary: existing interface converted to monitor mode in-place
+        for name in sorted(post):
+            if name != interface and _is_monitor(name):
+                log(f"Monitor mode enabled: {name}")
+                return name
+
+        # Tertiary: regex on airmon-ng output — require leading alpha to reject
+        # bare numbers (e.g. "10") that some airmon-ng versions emit
+        for pattern in (
+            r'enabled\s+(?:for|on)\s+(?:\[[^\]]*\])?\S+\s+on\s+(?:\[[^\]]*\])?([a-zA-Z]\w*)',
+            r'enabled\s+(?:for|on)\s+(?:\[[^\]]*\])?([a-zA-Z]\w*)',
+        ):
+            m = re.search(pattern, out, re.I)
+            if m:
+                detected = m.group(1).strip()
+                log(f"Monitor mode enabled: {detected}")
                 return detected
+
         log(f"Monitor mode started — using configured name {monitor_iface}")
         return monitor_iface
+
     _run(["sudo", "ip", "link", "set", interface, "down"])
     _run(["sudo", "iw", interface, "set", "monitor", "none"])
     _run(["sudo", "ip", "link", "set", interface, "up"])
