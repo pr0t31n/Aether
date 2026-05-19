@@ -342,7 +342,11 @@ def _find_requirements(dest: str, hinted_path: str) -> str | None:
     return None
 
 
-_MAKEFILE_SKIP_DIRS = {"contrib", "test", "tests", "examples", "doc", "docs", ".git"}
+_MAKEFILE_SKIP_DIRS = {
+    "contrib", "test", "tests", "examples", "doc", "docs", ".git",
+    # Skip bundled auxiliary tooling that ships inside some repos
+    "scripts", "airgraph-ng",
+}
 
 
 def _find_makefile(dest: str, hinted_dir: str) -> str | None:
@@ -359,8 +363,9 @@ def _find_makefile(dest: str, hinted_dir: str) -> str | None:
         for mf in sorted(dest_path.rglob("Makefile")):
             if any(part in _MAKEFILE_SKIP_DIRS for part in mf.parts):
                 continue
-            warn(f"  Makefile not at {hinted_dir}; building in {mf.parent} instead")
+            warn(f"Makefile not at {hinted_dir}; building in {mf.parent} instead")
             return str(mf.parent)
+    warn(f"No suitable Makefile found under {dest} — skipping build step")
     return None
 
 
@@ -617,6 +622,9 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
+    # Line-buffer stdout so phase headers appear before subprocess output in logs
+    sys.stdout.reconfigure(line_buffering=True)
+
     args = parse_args()
     dry_run = args.check
 

@@ -195,6 +195,12 @@ def save_findings(output_dir: Path) -> None:
 
 # ── Subprocess helpers ────────────────────────────────────────────────────────
 
+_ANSI_ESC = re.compile(r'\x1b(?:\[[0-9;?]*[a-zA-Z]|[()][012AB])')
+
+def _strip_ansi(text: str) -> str:
+    return _ANSI_ESC.sub('', text)
+
+
 def _popen(cmd: list, **kwargs) -> subprocess.Popen:
     kwargs.setdefault("stdin", subprocess.DEVNULL)
     return subprocess.Popen(cmd, **kwargs)
@@ -1461,7 +1467,9 @@ def phase_deauth_handshake(
                     line = _readline_timed(cap_proc.stdout,
                                            min(deadline, time.time() + 2))
                     if line:
-                        decoded = line.decode("utf-8", errors="replace").rstrip()
+                        decoded = _strip_ansi(
+                            line.decode("utf-8", errors="replace").rstrip()
+                        )
                         if decoded.strip():
                             log(decoded)
                         if re.search(r'WPA handshake', decoded, re.I):
@@ -1843,8 +1851,7 @@ def phase_wifite(
         "--wps",
         "--pmkid",
         "-i", monitor_iface,
-        "--timeout", str(min(timeout, 60)),
-        "--crack-handshake",
+        "--wpa-handshake-timeout", str(min(timeout, 60)),
     ]
 
     def _parse_output(out_lines: list[str], ssid: str, out_file: Path) -> None:
@@ -2244,7 +2251,7 @@ def phase_dragondrain(
 # ── Phase 5: krackattacks — WPA2 KRACK key reinstallation testing ─────────────
 
 def phase_krack(
-    monitor_iface: str, target_aps: list[dict],
+    interface: str, target_aps: list[dict],
     krackattacks_path: str, output_dir: Path,
     timeout: int = 180,
 ) -> None:
@@ -3785,14 +3792,6 @@ def run(config: dict, project: str) -> None:
                 output_dir, timeout=60,
             )
 
-        if phases_cfg.get("krack", True):
-            phase_krack(
-                active_monitor, target_aps,
-                tools.get("krackattacks",
-                           "/opt/krackattacks-scripts/krackattack/krack-test-client.py"),
-                output_dir, timeout=timeout,
-            )
-
         # Collect any PSKs cracked in earlier phases for use by the rogue AP
         cracked_psks = _collect_cracked_psks(output_dir)
 
@@ -3845,6 +3844,17 @@ def run(config: dict, project: str) -> None:
                 os.unlink(_effective_wl)
             except Exception:
                 pass
+
+    # KRACK runs after monitor mode is disabled — it needs wlan0 in managed
+    # mode; running it while the interface is wlan0mon causes hostapd/scapy
+    # to fail with "Interface not found".
+    if phases_cfg.get("krack", True):
+        phase_krack(
+            interface, target_aps,
+            tools.get("krackattacks",
+                       "/opt/krackattacks-scripts/krackattack/krack-test-client.py"),
+            output_dir, timeout=timeout,
+        )
 
     save_findings(output_dir)
 
