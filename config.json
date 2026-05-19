@@ -45,5 +45,7 @@
   "scrape_url": "",
   "scrape_depth": 4,
   "intel_scan_seconds": 45,
-  "deauth_packets": 5
+  "deauth_packets": 5,
+  "client_name": "",
+  "client_short": ""
 }

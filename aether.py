@@ -43,7 +43,7 @@ from html.parser import HTMLParser as _HTMLParser
 from itertools import permutations as _permutations
 from pathlib import Path
 
-VERSION = "1.5.4"
+VERSION = "1.5.5"
 
 
 def _clients_base() -> Path:
@@ -74,14 +74,15 @@ def _build_project_dir(client_short: str, start_date: str, tool_name: str) -> Pa
     return path
 
 
-def _write_project_meta(project_dir: Path, tool: str, client_short: str,
-                        year: str, version: str) -> None:
+def _write_project_meta(project_dir: Path, tool: str, client_name: str,
+                        client_short: str, year: str, version: str) -> None:
     """Write project_meta.json so Flask apps can discover this project."""
     import json as _json
     try:
         (project_dir / "project_meta.json").write_text(
             _json.dumps({
                 "tool":         tool,
+                "client_name":  client_name,
                 "client_short": client_short,
                 "year":         year,
                 "created_at":   datetime.now().isoformat(),
@@ -113,10 +114,26 @@ _findings_collected: list[dict] = []
 
 # ── Output protocol ───────────────────────────────────────────────────────────
 _MANAGED = os.environ.get("SPECTRE_MANAGED", "") == "1"
+_log_fh = None  # opened in main() once the project dir is known
 
 
 def _tok(token: str, msg: str) -> None:
     print(f"{token} {msg}", flush=True)
+    if _log_fh is not None:
+        ts = datetime.now().strftime("%H:%M:%S")
+        if token == "__SPECTRE_LOG__":
+            _log_fh.write(f"[{ts}] {msg}\n")
+        elif token == "__SPECTRE_ERR__":
+            _log_fh.write(f"[{ts}] [!] {msg}\n")
+        elif token == "__SPECTRE_STATUS__":
+            try:
+                d = json.loads(msg)
+                step = f" — {d['step']}" if d.get("step") else ""
+                _log_fh.write(f"[{ts}] [{d.get('status','?').upper()}] "
+                              f"{d.get('label', d.get('phase','?'))}{step}\n")
+            except Exception:
+                pass
+        _log_fh.flush()
 
 
 def log(msg: str)    -> None: _tok("__SPECTRE_LOG__",     msg)
@@ -2318,11 +2335,16 @@ def run(config: dict, project: str) -> None:
     if _scope_bssids or _scope_ssids:
         log(f"Scope: {len(_scope_bssids)} BSSID(s), {len(_scope_ssids)} SSID(s) in whitelist")
 
+    client_name  = config.get("client_name", "")
+    client_short = config.get("client_short", "")
+
     log("=" * 60)
     log("AUTHORIZED USE ONLY. Explicit written permission from the")
     log("network owner is required before any wireless assessment.")
     log("=" * 60)
     log(f"Aether Wireless Penetration Testing Orchestrator v{VERSION}")
+    if client_name:
+        log(f"Client   : {client_name}" + (f" ({client_short})" if client_short else ""))
     log(f"Project  : {project}")
     log(f"Interface: {interface}")
     log(f"Targets  : {', '.join(target_ssids) if target_ssids else '(all in-scope)'}")
@@ -2576,10 +2598,19 @@ def main():
     _write_project_meta(
         Path(args.project),
         tool=os.environ.get("SPECTRE_TOOL_ID", "aether"),
+        client_name=(config.get("client_name") or ""),
         client_short=(config.get("client_short") or ""),
         year=((config.get("start_date") or "")[:4] or datetime.now().strftime("%Y")),
         version=VERSION,
     )
+
+    global _log_fh
+    try:
+        _log_fh = open(Path(args.project) / "aether_console.log", "a", encoding="utf-8")
+        _log_fh.write(f"# Aether v{VERSION} — {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+        _log_fh.flush()
+    except Exception:
+        _log_fh = None
 
     if args.interface:
         config["interface"] = args.interface
