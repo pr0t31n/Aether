@@ -43,7 +43,7 @@ from html.parser import HTMLParser as _HTMLParser
 from itertools import permutations as _permutations
 from pathlib import Path
 
-VERSION = "1.5.0"
+VERSION = "1.5.2"
 
 
 def _clients_base() -> Path:
@@ -793,16 +793,33 @@ def enable_monitor_mode(interface: str, monitor_iface: str) -> str:
 
 
 def disable_monitor_mode(monitor_iface: str, original_iface: str) -> None:
+    # Step 1: tear down the monitor interface
     if shutil.which("airmon-ng"):
-        _run(["sudo", "airmon-ng", "stop", monitor_iface])
+        _run(["sudo", "airmon-ng", "stop", monitor_iface], timeout=15)
     else:
-        _run(["sudo", "ip", "link", "set", monitor_iface, "down"])
-        _run(["sudo", "iw", monitor_iface, "set", "type", "managed"])
-        _run(["sudo", "ip", "link", "set", monitor_iface, "up"])
+        _run(["sudo", "ip", "link", "set", monitor_iface, "down"], timeout=5)
+        _run(["sudo", "iw", monitor_iface, "set", "type", "managed"], timeout=5)
+        _run(["sudo", "ip", "link", "set", monitor_iface, "up"], timeout=5)
+
+    # Step 2: explicitly restore the original physical interface to managed mode.
+    # airmon-ng stop removes the monitor vif but does not reset the underlying
+    # PHY — wlan0 is left down and the driver still thinks it is in monitor mode.
+    # Do this unconditionally; failures (e.g. interface already gone) are benign.
+    if original_iface and original_iface != monitor_iface:
+        _run(["sudo", "ip", "link", "set", original_iface, "down"], timeout=5)
+        if shutil.which("iw"):
+            _run(["sudo", "iw", original_iface, "set", "type", "managed"], timeout=5)
+        elif shutil.which("iwconfig"):
+            _run(["sudo", "iwconfig", original_iface, "mode", "managed"], timeout=5)
+        _run(["sudo", "ip", "link", "set", original_iface, "up"], timeout=5)
+
+    # Step 3: restart NetworkManager so it re-acquires the interface.
+    # Do NOT also restart wpa_supplicant separately — NetworkManager manages
+    # its own wpa_supplicant instance; a standalone restart races against NM
+    # and leaves the interface unmanaged.
     if sys.platform.startswith("linux"):
         if shutil.which("systemctl"):
-            _run(["sudo", "systemctl", "restart", "NetworkManager"],  timeout=20)
-            _run(["sudo", "systemctl", "restart", "wpa_supplicant"],  timeout=20)
+            _run(["sudo", "systemctl", "restart", "NetworkManager"], timeout=20)
         elif shutil.which("service"):
             _run(["sudo", "service", "NetworkManager", "restart"], timeout=20)
     log(f"Monitor mode disabled — {original_iface} restored to managed mode")
@@ -2533,186 +2550,6 @@ def main():
     except json.JSONDecodeError as exc:
         print(f"[!] Config parse error: {exc}", file=sys.stderr)
         sys.exit(1)
-
-    # Resolve project directory: CLI arg → absolute; relative → under clients_base;
-    # omitted → structured path from config's client_short and start_date fields.
-    import re as _re
-    if args.project:
-        _pp = Path(args.project)
-        args.project = str(_pp if _pp.is_absolute() else _clients_base() / _pp)
-    else:
-        _cs = (config.get("client_short") or "").strip()
-        _sd = (config.get("start_date") or "").strip()
-        # Use tool-specific name from TOOLS registry if this is a variant (aether-z, etc.)
-        _tool_key = os.environ.get("SPECTRE_TOOL_ID", "aether")
-        args.project = str(_build_project_dir(_cs, _sd, _tool_key))
-    _write_project_meta(
-        Path(args.project),
-        tool=os.environ.get("SPECTRE_TOOL_ID", "aether"),
-        client_short=(config.get("client_short") or ""),
-        year=((config.get("start_date") or "")[:4] or datetime.now().strftime("%Y")),
-        version=VERSION,
-    )
-
-    # Resolve project directory: CLI arg → absolute; relative → under clients_base;
-    # omitted → structured path from config's client_short and start_date fields.
-    import re as _re
-    if args.project:
-        _pp = Path(args.project)
-        args.project = str(_pp if _pp.is_absolute() else _clients_base() / _pp)
-    else:
-        _cs = (config.get("client_short") or "").strip()
-        _sd = (config.get("start_date") or "").strip()
-        # Use tool-specific name from TOOLS registry if this is a variant (aether-z, etc.)
-        _tool_key = os.environ.get("SPECTRE_TOOL_ID", "aether")
-        args.project = str(_build_project_dir(_cs, _sd, _tool_key))
-    _write_project_meta(
-        Path(args.project),
-        tool=os.environ.get("SPECTRE_TOOL_ID", "aether"),
-        client_short=(config.get("client_short") or ""),
-        year=((config.get("start_date") or "")[:4] or datetime.now().strftime("%Y")),
-        version=VERSION,
-    )
-
-    # Resolve project directory: CLI arg → absolute; relative → under clients_base;
-    # omitted → structured path from config's client_short and start_date fields.
-    import re as _re
-    if args.project:
-        _pp = Path(args.project)
-        args.project = str(_pp if _pp.is_absolute() else _clients_base() / _pp)
-    else:
-        _cs = (config.get("client_short") or "").strip()
-        _sd = (config.get("start_date") or "").strip()
-        # Use tool-specific name from TOOLS registry if this is a variant (aether-z, etc.)
-        _tool_key = os.environ.get("SPECTRE_TOOL_ID", "aether")
-        args.project = str(_build_project_dir(_cs, _sd, _tool_key))
-    _write_project_meta(
-        Path(args.project),
-        tool=os.environ.get("SPECTRE_TOOL_ID", "aether"),
-        client_short=(config.get("client_short") or ""),
-        year=((config.get("start_date") or "")[:4] or datetime.now().strftime("%Y")),
-        version=VERSION,
-    )
-
-    # Resolve project directory: CLI arg → absolute; relative → under clients_base;
-    # omitted → structured path from config's client_short and start_date fields.
-    import re as _re
-    if args.project:
-        _pp = Path(args.project)
-        args.project = str(_pp if _pp.is_absolute() else _clients_base() / _pp)
-    else:
-        _cs = (config.get("client_short") or "").strip()
-        _sd = (config.get("start_date") or "").strip()
-        # Use tool-specific name from TOOLS registry if this is a variant (aether-z, etc.)
-        _tool_key = os.environ.get("SPECTRE_TOOL_ID", "aether")
-        args.project = str(_build_project_dir(_cs, _sd, _tool_key))
-    _write_project_meta(
-        Path(args.project),
-        tool=os.environ.get("SPECTRE_TOOL_ID", "aether"),
-        client_short=(config.get("client_short") or ""),
-        year=((config.get("start_date") or "")[:4] or datetime.now().strftime("%Y")),
-        version=VERSION,
-    )
-
-    # Resolve project directory: CLI arg → absolute; relative → under clients_base;
-    # omitted → structured path from config's client_short and start_date fields.
-    import re as _re
-    if args.project:
-        _pp = Path(args.project)
-        args.project = str(_pp if _pp.is_absolute() else _clients_base() / _pp)
-    else:
-        _cs = (config.get("client_short") or "").strip()
-        _sd = (config.get("start_date") or "").strip()
-        # Use tool-specific name from TOOLS registry if this is a variant (aether-z, etc.)
-        _tool_key = os.environ.get("SPECTRE_TOOL_ID", "aether")
-        args.project = str(_build_project_dir(_cs, _sd, _tool_key))
-    _write_project_meta(
-        Path(args.project),
-        tool=os.environ.get("SPECTRE_TOOL_ID", "aether"),
-        client_short=(config.get("client_short") or ""),
-        year=((config.get("start_date") or "")[:4] or datetime.now().strftime("%Y")),
-        version=VERSION,
-    )
-
-    # Resolve project directory: CLI arg → absolute; relative → under clients_base;
-    # omitted → structured path from config's client_short and start_date fields.
-    import re as _re
-    if args.project:
-        _pp = Path(args.project)
-        args.project = str(_pp if _pp.is_absolute() else _clients_base() / _pp)
-    else:
-        _cs = (config.get("client_short") or "").strip()
-        _sd = (config.get("start_date") or "").strip()
-        # Use tool-specific name from TOOLS registry if this is a variant (aether-z, etc.)
-        _tool_key = os.environ.get("SPECTRE_TOOL_ID", "aether")
-        args.project = str(_build_project_dir(_cs, _sd, _tool_key))
-    _write_project_meta(
-        Path(args.project),
-        tool=os.environ.get("SPECTRE_TOOL_ID", "aether"),
-        client_short=(config.get("client_short") or ""),
-        year=((config.get("start_date") or "")[:4] or datetime.now().strftime("%Y")),
-        version=VERSION,
-    )
-
-    # Resolve project directory: CLI arg → absolute; relative → under clients_base;
-    # omitted → structured path from config's client_short and start_date fields.
-    import re as _re
-    if args.project:
-        _pp = Path(args.project)
-        args.project = str(_pp if _pp.is_absolute() else _clients_base() / _pp)
-    else:
-        _cs = (config.get("client_short") or "").strip()
-        _sd = (config.get("start_date") or "").strip()
-        # Use tool-specific name from TOOLS registry if this is a variant (aether-z, etc.)
-        _tool_key = os.environ.get("SPECTRE_TOOL_ID", "aether")
-        args.project = str(_build_project_dir(_cs, _sd, _tool_key))
-    _write_project_meta(
-        Path(args.project),
-        tool=os.environ.get("SPECTRE_TOOL_ID", "aether"),
-        client_short=(config.get("client_short") or ""),
-        year=((config.get("start_date") or "")[:4] or datetime.now().strftime("%Y")),
-        version=VERSION,
-    )
-
-    # Resolve project directory: CLI arg → absolute; relative → under clients_base;
-    # omitted → structured path from config's client_short and start_date fields.
-    import re as _re
-    if args.project:
-        _pp = Path(args.project)
-        args.project = str(_pp if _pp.is_absolute() else _clients_base() / _pp)
-    else:
-        _cs = (config.get("client_short") or "").strip()
-        _sd = (config.get("start_date") or "").strip()
-        # Use tool-specific name from TOOLS registry if this is a variant (aether-z, etc.)
-        _tool_key = os.environ.get("SPECTRE_TOOL_ID", "aether")
-        args.project = str(_build_project_dir(_cs, _sd, _tool_key))
-    _write_project_meta(
-        Path(args.project),
-        tool=os.environ.get("SPECTRE_TOOL_ID", "aether"),
-        client_short=(config.get("client_short") or ""),
-        year=((config.get("start_date") or "")[:4] or datetime.now().strftime("%Y")),
-        version=VERSION,
-    )
-
-    # Resolve project directory: CLI arg → absolute; relative → under clients_base;
-    # omitted → structured path from config's client_short and start_date fields.
-    import re as _re
-    if args.project:
-        _pp = Path(args.project)
-        args.project = str(_pp if _pp.is_absolute() else _clients_base() / _pp)
-    else:
-        _cs = (config.get("client_short") or "").strip()
-        _sd = (config.get("start_date") or "").strip()
-        # Use tool-specific name from TOOLS registry if this is a variant (aether-z, etc.)
-        _tool_key = os.environ.get("SPECTRE_TOOL_ID", "aether")
-        args.project = str(_build_project_dir(_cs, _sd, _tool_key))
-    _write_project_meta(
-        Path(args.project),
-        tool=os.environ.get("SPECTRE_TOOL_ID", "aether"),
-        client_short=(config.get("client_short") or ""),
-        year=((config.get("start_date") or "")[:4] or datetime.now().strftime("%Y")),
-        version=VERSION,
-    )
 
     # Resolve project directory: CLI arg → absolute; relative → under clients_base;
     # omitted → structured path from config's client_short and start_date fields.

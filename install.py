@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # install.py — Aether Wireless Penetration Testing Orchestrator
-# VERSION: 1.3.0 (referenced from /opt/pr0t31n/Aether/VERSION — do not bump here)
+# VERSION: 1.5.2 (referenced from /opt/pr0t31n/Aether/VERSION — do not bump here)
 # Installs all dependencies for aether.py and configures the system.
 
 import argparse
@@ -122,20 +122,45 @@ def require_root() -> None:
 # ---------------------------------------------------------------------------
 
 APT_PACKAGES = [
-    "aircrack-ng", "reaver", "hcxdumptool", "hcxtools", "hashcat",
-    "asleap", "iw", "wireless-tools", "iproute2", "net-tools",
-    "python3-pip", "python3-dev", "git", "libssl-dev", "libpcap-dev",
+    # aircrack-ng suite (airmon-ng, airodump-ng, aireplay-ng, aircrack-ng)
+    "aircrack-ng",
+    # WPS tools (wash ships with reaver)
+    "reaver",
+    # PMKID capture
+    "hcxdumptool",
+    # hcxpcapngtool and hcxpcaptool
+    "hcxtools",
+    # GPU/CPU hash cracking
+    "hashcat",
+    # LEAP/EAP-MD5 cracking
+    "asleap",
+    # wireless config / monitor mode helpers
+    "iw", "wireless-tools", "iproute2", "net-tools",
+    # build tools (needed for dragondrain-and-time C compilation)
+    "build-essential",
+    # Python Scapy for dragonslayer / krackattacks
+    "python3-scapy",
+    # hostapd base (eaphammer builds hostapd-wpe on top of this)
+    "hostapd",
+    # nl80211 libs for dragonslayer
+    "libnl-3-dev", "libnl-genl-3-dev",
+    # build deps for C tools
+    "libssl-dev", "libpcap-dev",
+    # Python / git build essentials
+    "python3-pip", "python3-dev", "git",
 ]
 
 DNF_PACKAGES = [
-    "epel-release", "aircrack-ng", "hashcat", "iw", "wireless-tools",
+    "epel-release", "aircrack-ng", "hashcat", "reaver", "iw", "wireless-tools",
     "iproute", "net-tools", "python3-pip", "python3-devel", "git",
-    "openssl-devel", "libpcap-devel",
+    "openssl-devel", "libpcap-devel", "gcc", "make",
+    "libnl3-devel",
 ]
 
 ZYPPER_PACKAGES = [
-    "aircrack-ng", "hashcat", "iw", "wireless-tools", "iproute2",
+    "aircrack-ng", "hashcat", "reaver", "iw", "wireless-tools", "iproute2",
     "net-tools", "python3-pip", "python3-devel", "git",
+    "gcc", "make", "libnl3-devel",
 ]
 
 BREW_PACKAGES = ["aircrack-ng", "hashcat"]
@@ -223,48 +248,62 @@ def phase_go(dry_run: bool) -> None:
 
 GIT_REPOS = [
     {
-        "url":  "https://github.com/kimocoder/wifite2",
-        "dest": "/opt/wifite2",
-        "post": ["python3", "/opt/wifite2/setup.py", "install"],
-        "post_cwd": None,
+        "url":   "https://github.com/kimocoder/wifite2",
+        "dest":  "/opt/wifite2",
         "label": "wifite2",
+        "post_cmds": [
+            # Install wifite2 so `wifite` is available in PATH
+            ["pip3", "install", "--break-system-packages", "/opt/wifite2/"],
+        ],
     },
     {
-        "url":  "https://github.com/s0lst1c3/eaphammer",
-        "dest": "/opt/eaphammer",
-        "post": ["pip3", "install", "--break-system-packages", "-r",
-                 "/opt/eaphammer/requirements.txt"],
-        "post_cwd": None,
+        "url":   "https://github.com/s0lst1c3/eaphammer",
+        "dest":  "/opt/eaphammer",
         "label": "eaphammer",
+        "post_cmds": [
+            # Install Python dependencies
+            ["pip3", "install", "--break-system-packages", "-r",
+             "/opt/eaphammer/requirements.txt"],
+            # Compile hostapd-wpe and finalize setup (check=False — may warn but not fatal)
+            ["python3", "/opt/eaphammer/eaphammer", "--setup"],
+        ],
     },
     {
-        "url":  "https://github.com/vanhoefm/dragonslayer",
-        "dest": "/opt/dragonslayer",
-        "post": None,
-        "post_cwd": None,
+        "url":   "https://github.com/vanhoefm/dragonslayer",
+        "dest":  "/opt/dragonslayer",
         "label": "dragonslayer",
+        "post_cmds": [
+            # Install Scapy and other Python deps
+            ["pip3", "install", "--break-system-packages", "-r",
+             "/opt/dragonslayer/requirements.txt"],
+        ],
     },
     {
-        "url":  "https://github.com/vanhoefm/dragondrain-and-time",
-        "dest": "/opt/dragondrain-and-time",
-        "post": None,
-        "post_cwd": None,
+        "url":   "https://github.com/vanhoefm/dragondrain-and-time",
+        "dest":  "/opt/dragondrain-and-time",
         "label": "dragondrain-and-time",
+        "post_cmds": [
+            # Build the C dragondrain binary
+            ["make", "-C", "/opt/dragondrain-and-time"],
+        ],
     },
     {
-        "url":  "https://github.com/vanhoefm/krackattacks-scripts",
-        "dest": "/opt/krackattacks-scripts",
-        "post": None,
-        "post_cwd": None,
+        "url":   "https://github.com/vanhoefm/krackattacks-scripts",
+        "dest":  "/opt/krackattacks-scripts",
         "label": "krackattacks-scripts",
+        "post_cmds": [
+            # Install Python deps for the krackattack scripts
+            ["pip3", "install", "--break-system-packages", "-r",
+             "/opt/krackattacks-scripts/krackattack/requirements.txt"],
+        ],
     },
 ]
 
 
 def clone_or_update(repo: dict, dry_run: bool) -> None:
-    url   = repo["url"]
-    dest  = repo["dest"]
-    label = repo["label"]
+    url      = repo["url"]
+    dest     = repo["dest"]
+    label    = repo["label"]
     dest_path = Path(dest)
 
     if dest_path.exists():
@@ -279,9 +318,9 @@ def clone_or_update(repo: dict, dry_run: bool) -> None:
             error(f"{label}: clone failed — skipping post-install steps.")
             return
 
-    if repo.get("post"):
-        info(f"{label}: running post-install step…")
-        run(repo["post"], cwd=repo.get("post_cwd"), dry_run=dry_run)
+    for cmd in repo.get("post_cmds") or []:
+        info(f"{label}: post-install: {' '.join(str(c) for c in cmd)}")
+        run(cmd, dry_run=dry_run)
 
 
 def phase_git(os_id: str, dry_run: bool) -> None:
@@ -299,7 +338,8 @@ def phase_git(os_id: str, dry_run: bool) -> None:
 # ---------------------------------------------------------------------------
 
 SYMLINKS = {
-    "/usr/local/bin/aether": "/opt/pr0t31n/Aether/aether.py",
+    "/usr/local/bin/aether":    "/opt/pr0t31n/Aether/aether.py",
+    "/usr/local/bin/eaphammer": "/opt/eaphammer/eaphammer",
 }
 
 
@@ -415,8 +455,18 @@ def phase_service(os_id: str, dry_run: bool) -> None:
 # ---------------------------------------------------------------------------
 
 VERIFY_TOOLS = [
+    # aircrack-ng suite
     "aircrack-ng", "airodump-ng", "aireplay-ng", "airmon-ng",
-    "wash", "hcxdumptool", "hcxpcapngtool", "hashcat", "wifite",
+    # WPS
+    "reaver", "wash",
+    # PMKID capture / conversion
+    "hcxdumptool", "hcxpcapngtool",
+    # cracking
+    "hashcat", "asleap",
+    # automated wifi attacks
+    "wifite",
+    # EAP attacks
+    "eaphammer",
 ]
 
 
@@ -430,6 +480,20 @@ def phase_verify() -> None:
         else:
             warn(f"{tool:25s} NOT FOUND")
             all_ok = False
+
+    # Check git-cloned tools that don't land in PATH
+    git_tool_paths = [
+        ("/opt/dragonslayer",          "dragonslayer"),
+        ("/opt/dragondrain-and-time",  "dragondrain-and-time"),
+        ("/opt/krackattacks-scripts",  "krackattacks-scripts"),
+    ]
+    for path, label in git_tool_paths:
+        if Path(path).exists():
+            success(f"{label:25s} found at {path}")
+        else:
+            warn(f"{label:25s} NOT FOUND at {path}")
+            all_ok = False
+
     print()
     if all_ok:
         success("All tools verified successfully.")
@@ -459,7 +523,7 @@ def main() -> None:
     dry_run = args.check
 
     cprint("\n" + "=" * 60, GREEN, bold=True)
-    cprint("  Aether Installer  —  v1.3.0", GREEN, bold=True)
+    cprint("  Aether Installer  —  v1.5.2", GREEN, bold=True)
     cprint("  Wireless Penetration Testing Orchestrator", GREEN, bold=True)
     cprint("=" * 60 + "\n", GREEN, bold=True)
 
