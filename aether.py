@@ -53,7 +53,7 @@ import struct
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-VERSION = "1.7.6"
+VERSION = "1.7.7"
 
 
 def _clients_base() -> Path:
@@ -3809,8 +3809,14 @@ def phase_legacy_attacks(monitor_iface: str, target_aps: list,
         (p2p_dir / "p2p_devices.json").write_text(
             json.dumps(p2p_devices, indent=2), encoding="utf-8"
         )
-        log(f"Phase 11b: {len(p2p_devices)} Wi-Fi Direct device(s) found")
-        for device in p2p_devices:
+        scoped   = [d for d in p2p_devices if _in_scope(d)]
+        unscoped = [d for d in p2p_devices if not _in_scope(d)]
+        if unscoped:
+            labels = ", ".join(d.get("ssid") or d["bssid"] for d in unscoped)
+            log(f"Phase 11b: {len(unscoped)} P2P device(s) out of scope — skipped: {labels}")
+        log(f"Phase 11b: {len(scoped)} in-scope Wi-Fi Direct device(s) to test "
+            f"({len(p2p_devices)} total discovered)")
+        for device in scoped:
             bssid   = device["bssid"]
             ssid    = device.get("ssid", "")
             channel = device.get("channel", 6) or 6
