@@ -63,7 +63,8 @@
     "portal_iface_ip": "192.168.88.1",
     "portal_subnet": "192.168.88.0/24",
     "dhcp_range_start": "192.168.88.50",
-    "dhcp_range_end": "192.168.88.150"
+    "dhcp_range_end": "192.168.88.150",
+    "country_code": "US"
   },
   "post_connection": {
     "arp_poison": true,

