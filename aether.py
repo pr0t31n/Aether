@@ -53,7 +53,7 @@ import struct
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-VERSION = "1.7.7"
+VERSION = "1.10.0"
 
 
 def _clients_base() -> Path:
@@ -102,6 +102,32 @@ def _write_project_meta(project_dir: Path, tool: str, client_name: str,
         )
     except Exception:
         pass
+
+
+def _u_dual_write_meta(project_dir, *, tool: str, version: str,
+                       client_short: str = "", client_name: str = "",
+                       engagement_name: str = "", target: str = "") -> bool:
+    """Dual-write universal meta.json (schema 1.0). Graceful no-op when
+    /opt/pr0t31n/shared/pr0t31n_schema.py is not installed."""
+    try:
+        import sys as _s
+        if "/opt/pr0t31n/shared" not in _s.path:
+            _s.path.insert(0, "/opt/pr0t31n/shared")
+        import pr0t31n_schema as _us
+    except ImportError:
+        return False
+    try:
+        meta = _us.make_meta(
+            tool=tool, version=version,
+            client_short=client_short or "unknown",
+            client_name=client_name or client_short or "unknown",
+            engagement_name=engagement_name or f"{tool} run",
+            target=target or "",
+        )
+        _us.atomic_write_json(Path(project_dir) / "meta.json", meta)
+        return True
+    except Exception:
+        return False
 
 
 # ── Findings catalogue ────────────────────────────────────────────────────────
@@ -193,6 +219,80 @@ def save_findings(output_dir: Path) -> None:
     out = output_dir / "findings_spectre.json"
     out.write_text(json.dumps(_findings_collected, indent=2), encoding="utf-8")
     log(f"Findings written: {out} ({len(_findings_collected)} item(s))")
+    # Synthesise universal findings.json + summary.json (schema 1.0) alongside.
+    _u_synthesize_outputs(output_dir, _findings_collected)
+
+
+def _u_synthesize_outputs(output_dir: Path, native_findings: list) -> None:
+    """Translate Aether's findings_spectre.json entries into universal schema
+    and write findings.json + summary.json. BSSID/SSID map to ip/hostname."""
+    try:
+        import sys as _s
+        if "/opt/pr0t31n/shared" not in _s.path:
+            _s.path.insert(0, "/opt/pr0t31n/shared")
+        import pr0t31n_schema as _us
+    except ImportError:
+        return
+    try:
+        mapped = []
+        for f in (native_findings or []):
+            if not isinstance(f, dict):
+                continue
+            data    = f.get("data") or {}
+            bssid   = data.get("bssid") or data.get("BSSID") or ""
+            ssid    = data.get("ssid")  or data.get("SSID")  or ""
+            channel = data.get("channel") or data.get("ch")  or 0
+            try:
+                _ch_int = int(channel) if channel else 0
+            except (ValueError, TypeError):
+                _ch_int = 0
+            mapped.append({
+                "title":       f.get("title", ""),
+                "datetime":    f.get("ts", ""),
+                # v1.1: ip/hostname/port reserved for actual network identity;
+                # wireless-specific data lives in ssid/bssid/wireless_data.
+                "ip":          "",
+                "port":        0,
+                "hostname":    "",
+                "risk":        str(f.get("severity", "INFO")).upper(),
+                "command":     f.get("command", ""),
+                "description": f.get("description", ""),
+                "output":      json.dumps(data, indent=2)[:4096] if data else "",
+                "output_file": f.get("output_file", ""),
+                "cves":        ",".join(f.get("cves", []) or []),
+                "sources":     "aether",
+                "service":     "wifi",
+                "affected":    f"{ssid} ({bssid})" if ssid or bssid else "",
+                "remediation": f.get("remediation", "Review wireless configuration."),
+                "owasp":       "", "owasp_url": "", "nist": "",
+                "exploitdb":   False, "metasploit": False, "exploit_details": [],
+                # v1.1 enrichment
+                "ssid":          ssid,
+                "bssid":         bssid,
+                "wireless_data": {**data, "channel": _ch_int} if data else {},
+                "cvss_score":    f.get("cvss_score"),
+                "cvss_vector":   f.get("cvss_vector", ""),
+            })
+        n = _us.write_universal_findings(output_dir, mapped,
+                                          tool="aether", scope=None, phase="")
+        risk_counts = {"CRITICAL": 0, "HIGH": 0, "MEDIUM": 0, "LOW": 0, "INFO": 0}
+        for m in mapped:
+            r = str(m.get("risk", "INFO")).upper()
+            if r in risk_counts:
+                risk_counts[r] += 1
+        from datetime import datetime as _dt, timezone as _tz
+        now = _dt.now(_tz.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        _us.write_summary(output_dir, _us.make_summary(
+            tool="aether", version=VERSION,
+            scan_start=now, scan_end=now,
+            target="wireless", success=True,
+            total_findings=n, risk_counts=risk_counts,
+        ))
+    except Exception as e:
+        try:
+            log(f"universal output synthesis failed: {e}")
+        except Exception:
+            pass
 
 
 # ── Subprocess helpers ────────────────────────────────────────────────────────
@@ -4300,6 +4400,16 @@ def main():
         client_short=(config.get("client_short") or ""),
         year=((config.get("start_date") or "")[:4] or datetime.now().strftime("%Y")),
         version=VERSION,
+    )
+    # Dual-write universal meta.json (schema 1.0) for Prometheus UniversalParser.
+    _u_dual_write_meta(
+        Path(args.project),
+        tool="aether", version=VERSION,
+        client_short=(config.get("client_short") or ""),
+        client_name=(config.get("client_name") or ""),
+        engagement_name=(config.get("engagement_name") or ""),
+        target=(config.get("ssid") or config.get("interface") or
+                str(config.get("targets") or "")),
     )
 
     global _log_fh
