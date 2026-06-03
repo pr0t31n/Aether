@@ -53,7 +53,7 @@ import struct
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-VERSION = "1.11.0"
+VERSION = "1.12.0"
 
 
 def _clients_base() -> Path:
@@ -135,14 +135,22 @@ _catalogue: dict[str, dict] = {}
 
 
 def _load_catalogue() -> None:
+    """Load findings catalogue. Accepts both the v1.7+ wrapper format
+    ({findings: [...]}) and a bare top-level array. Previous loader
+    silently failed against the wrapper format leaving _catalogue empty."""
     global _catalogue
     cat_path = Path(__file__).parent / "findings_catalogue.json"
-    if cat_path.exists():
-        try:
-            entries = json.loads(cat_path.read_text(encoding="utf-8"))
-            _catalogue = {e["id"]: e for e in entries}
-        except Exception:
-            pass
+    if not cat_path.exists():
+        return
+    try:
+        data = json.loads(cat_path.read_text(encoding="utf-8"))
+        entries = (data["findings"] if isinstance(data, dict) and "findings" in data
+                   else data)
+        if not isinstance(entries, list):
+            return
+        _catalogue = {e["id"]: e for e in entries if isinstance(e, dict) and "id" in e}
+    except Exception as exc:
+        print(f"[Aether] catalogue load failed: {exc}", flush=True)
 
 
 # ── In-process findings collector ────────────────────────────────────────────
@@ -4165,6 +4173,18 @@ def run(config: dict, project: str) -> None:
             scan_seconds=intel_scan_seconds,
         )
 
+        # Phase 0-II: Contextual Intelligence — emit informational findings
+        # for every observed AP, client, vendor, channel, and authentication
+        # type so the engagement report has full attribution regardless of
+        # which risk-graded findings any subsequent phase produces.
+        if phases_cfg.get("contextual_intel", True):
+            phase_contextual_intel(enriched_aps, output_dir)
+
+        # Phase 0-III: Meraki Infrastructure Recon — classify APs, identify
+        # shared-physical-AP multi-SSID deployments, fingerprint firmware.
+        if phases_cfg.get("meraki_recon", True):
+            phase_meraki_recon(enriched_aps, output_dir)
+
         # Narrow subsequent phases to the best-scored AP when user has not
         # specified an explicit BSSID — reduces false-positive capture and
         # avoids attacking out-of-scope BSSIDs.
@@ -4266,6 +4286,23 @@ def run(config: dict, project: str) -> None:
                 active_monitor, target_aps, enriched_aps, output_dir,
                 tools, timeout,
             )
+
+        # Phase 0-IV-VII: Cert/iPSK/captive-portal/identity analysis —
+        # run AFTER capture-producing phases (wifite, deauth-handshake,
+        # eaphammer) so the analysis has pcaps to parse.
+        if phases_cfg.get("server_cert_analysis", True):
+            phase_server_cert_analysis(target_aps, output_dir, timeout=60)
+
+        if phases_cfg.get("ipsk_test", True):
+            phase_ipsk_test(active_monitor, interface, enriched_aps,
+                            output_dir, timeout=120)
+
+        if phases_cfg.get("captive_portal_test", True):
+            phase_captive_portal_test(target_aps, output_dir,
+                                       primary_iface=interface, timeout=60)
+
+        if phases_cfg.get("eaptls_identity_analysis", True):
+            phase_eaptls_identity_analysis(output_dir, timeout=30)
 
         if phases_cfg.get("post_connection", False):
             _ap_iface = (rogue_cfg.get("ap_interface") or "").strip()
@@ -4394,6 +4431,762 @@ def _startup_tool_check() -> None:
     if missing_critical:
         print("[!] Cannot continue without the aircrack-ng suite.\n", file=sys.stderr)
         sys.exit(1)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# v1.12 — Certificate-auth / Meraki / contextual-intel additions
+# ═══════════════════════════════════════════════════════════════════════════
+
+# ── Vendor OUI table for AP / client device classification ────────────────
+# Each entry: 24-bit OUI prefix (upper, no separators) → (vendor, product_line)
+# Meraki acquired by Cisco; both Cisco-Meraki and pre-acquisition Meraki
+# entries listed. Expand as needed; missing OUIs fall through to "Unknown".
+_OUI_TABLE: dict[str, tuple] = {
+    # Cisco-Meraki APs
+    "00180A": ("Cisco-Meraki", "MR / MX / MS series"),
+    "881544": ("Cisco-Meraki", "MR series"),
+    "E0CBBC": ("Cisco-Meraki", "MR / MX series"),
+    "ACC8DE": ("Cisco-Meraki", "MR series"),
+    "984FEE": ("Cisco-Meraki", "MR / MS series"),
+    "0CC47A": ("Cisco-Meraki", "MR series"),
+    "E45D37": ("Cisco-Meraki", "MR series"),
+    # Other common enterprise vendors (informational)
+    "001C57": ("Cisco", "Catalyst / Aironet"),
+    "002608": ("Apple", "iPhone / iPad"),
+    "78D294": ("Aruba-HPE", "Instant / IAP series"),
+    "D8B190": ("Aruba-HPE", "AP series"),
+    "001D7E": ("Aruba-HPE", "AP series"),
+    "0C7196": ("Ubiquiti", "UniFi AP"),
+    "F09FC2": ("Ubiquiti", "UniFi AP"),
+    "FCECDA": ("Ubiquiti", "UniFi AP"),
+    "00D02D": ("Ubiquiti", "UniFi AP"),
+    "00270D": ("Cisco", "Aironet"),
+    "DCCE41": ("Mikrotik", "RouterBOARD"),
+    "E48D8C": ("Routerboard", "Mikrotik"),
+}
+
+
+def _oui_lookup(mac: str) -> tuple:
+    """Return (vendor, product_line) for the MAC's OUI, or ('Unknown', '')."""
+    if not mac or len(mac) < 8:
+        return ("Unknown", "")
+    norm = mac.upper().replace(":", "").replace("-", "")[:6]
+    return _OUI_TABLE.get(norm, ("Unknown", ""))
+
+
+def _is_meraki_ap(bssid: str, vendor_ies: str = "") -> bool:
+    """Heuristic: Cisco-Meraki OUI in BSSID OR Meraki vendor-specific IE present."""
+    vendor, _line = _oui_lookup(bssid)
+    if "Meraki" in vendor:
+        return True
+    # Meraki vendor-specific OUI in beacon IEs: 00:18:0a (older) or per Cisco
+    ie_lower = (vendor_ies or "").lower()
+    return ("00180a" in ie_lower.replace(":", "") or
+            "00-18-0a" in ie_lower or
+            "meraki" in ie_lower)
+
+
+def _classify_auth_type(enc: str, auth: str) -> str:
+    """Return a normalized authentication type label.
+    Values: OPEN | WEP | WPA2-PSK | WPA2-Enterprise | WPA3-SAE |
+            WPA3-Enterprise | WPA2/WPA3-Transition | iPSK-Suspected | Unknown"""
+    s = ((enc or "") + " " + (auth or "")).upper()
+    if "WEP" in s and "WPA" not in s:
+        return "WEP"
+    if "SAE" in s and "PSK" in s:
+        return "WPA2/WPA3-Transition"
+    if "WPA3" in s and ("MGT" in s or "EAP" in s or "ENTERPRISE" in s):
+        return "WPA3-Enterprise"
+    if "WPA3" in s or "SAE" in s:
+        return "WPA3-SAE"
+    if ("WPA2" in s or "WPA" in s) and ("MGT" in s or "EAP" in s or "ENTERPRISE" in s):
+        return "WPA2-Enterprise"
+    if "WPA2" in s or "WPA" in s:
+        return "WPA2-PSK"
+    if "OPN" in s or "OPEN" in s or not s.strip():
+        return "OPEN"
+    return "Unknown"
+
+
+def _emit_info(category: str, summary: str, data: dict | None = None) -> None:
+    """Emit an informational finding for contextual intel. These do not carry
+    a risk grade on their own but provide engagement-context attribution."""
+    finding(
+        title=summary,
+        severity="Informational",
+        description=f"[{category}] {summary}",
+        data={**(data or {}), "category": category},
+    )
+
+
+# ── Phase: Contextual Intelligence — emit INFO findings for every detail ──
+
+def phase_contextual_intel(enriched_aps: list, output_dir: Path) -> None:
+    """Walk every observed AP and client, emit an informational finding for
+    each contextual datum so the engagement report has full attribution.
+
+    This is the 'capture everything' phase — distinct from action phases.
+    Emits no risk-graded findings; all output is Informational severity."""
+    status("p_ctx", "Phase 0-II: Contextual Intelligence", "running")
+    ctx_dir = output_dir / "contextual_intel"
+    ctx_dir.mkdir(exist_ok=True)
+
+    inventory = {"aps": [], "clients": [], "vendors": set(),
+                 "auth_types": set(), "channels": set(), "ciphers": set(),
+                 "probes": set(), "ssids": set()}
+
+    for ap in enriched_aps or []:
+        bssid = ap.get("bssid", "")
+        ssid  = ap.get("ssid", "(hidden)")
+        ch    = ap.get("channel", "?")
+        enc   = ap.get("encryption", "") or ""
+        auth  = ap.get("auth", "") or ""
+        pwr   = ap.get("power", "?")
+        vendor, line = _oui_lookup(bssid)
+        auth_type = _classify_auth_type(enc, auth)
+        is_meraki = _is_meraki_ap(bssid, ap.get("vendor_ies", ""))
+
+        # Per-AP catalog
+        ap_data = {
+            "bssid": bssid, "ssid": ssid, "channel": ch, "encryption": enc,
+            "auth": auth, "auth_type": auth_type, "power": pwr,
+            "vendor": vendor, "product_line": line,
+            "is_meraki": is_meraki,
+        }
+        inventory["aps"].append(ap_data)
+        inventory["vendors"].add(vendor)
+        inventory["auth_types"].add(auth_type)
+        inventory["channels"].add(str(ch))
+        inventory["ssids"].add(ssid)
+
+        finding_from_cat("AETHER-INFO-AP", data=ap_data,
+                         title_override=f"AP observed: {ssid!r} [{bssid}] ch{ch} {auth_type} ({vendor})")
+
+        finding_from_cat("AETHER-INFO-AUTH-TYPE",
+                         data={"bssid": bssid, "ssid": ssid, "auth_type": auth_type,
+                               "encryption_raw": enc, "auth_raw": auth},
+                         title_override=f"Authentication type classified: {auth_type} on {ssid!r}")
+
+        if vendor != "Unknown":
+            finding_from_cat("AETHER-INFO-VENDOR",
+                             data={"bssid": bssid, "vendor": vendor, "product_line": line},
+                             title_override=f"Vendor identified: {vendor} ({line}) — {bssid}")
+
+        finding_from_cat("AETHER-INFO-CHANNEL",
+                         data={"bssid": bssid, "ssid": ssid, "channel": ch},
+                         title_override=f"Channel allocation: {ssid!r} on ch{ch}")
+
+        # Per-client catalog within this AP
+        for client in (ap.get("clients") or []):
+            cmac    = client.get("mac", "")
+            cvendor, cline = _oui_lookup(cmac)
+            probes  = client.get("probes") or client.get("probe_ssids") or []
+            inventory["clients"].append({
+                "mac": cmac, "vendor": cvendor, "product_line": cline,
+                "associated_bssid": bssid, "associated_ssid": ssid,
+                "probes": probes,
+            })
+            finding_from_cat("AETHER-INFO-CLIENT",
+                             data={"mac": cmac, "vendor": cvendor,
+                                   "associated_bssid": bssid, "associated_ssid": ssid},
+                             title_override=f"Client observed: {cmac} ({cvendor}) on {ssid!r}")
+            for p in probes:
+                inventory["probes"].add(p)
+                finding_from_cat("AETHER-INFO-PROBE",
+                                 data={"client_mac": cmac, "probed_ssid": p,
+                                       "seen_on_bssid": bssid},
+                                 title_override=f"Client probe: {cmac} probed {p!r}")
+
+    # Save consolidated inventory snapshot
+    snapshot = {
+        "aps":         inventory["aps"],
+        "clients":     inventory["clients"],
+        "vendors":     sorted(inventory["vendors"]),
+        "auth_types":  sorted(inventory["auth_types"]),
+        "channels":    sorted(inventory["channels"]),
+        "ssids":       sorted(inventory["ssids"]),
+        "probes":      sorted(inventory["probes"]),
+    }
+    (ctx_dir / "inventory.json").write_text(
+        json.dumps(snapshot, indent=2), encoding="utf-8")
+    log(f"Contextual intel: {len(snapshot['aps'])} APs, "
+        f"{len(snapshot['clients'])} clients, {len(snapshot['vendors'])} vendors, "
+        f"{len(snapshot['auth_types'])} auth types observed")
+    status("p_ctx", "Phase 0-II: Contextual Intelligence", "complete",
+           f"{len(snapshot['aps'])} APs cataloged")
+
+
+# ── Phase: Meraki Infrastructure Recon ────────────────────────────────────
+
+def phase_meraki_recon(enriched_aps: list, output_dir: Path) -> None:
+    """Identify Meraki APs, classify product line by vendor IE, attempt
+    firmware fingerprinting, detect shared-BSSID multi-SSID deployments."""
+    status("p_meraki", "Phase 0-III: Meraki Infrastructure Reconnaissance", "running")
+    meraki_dir = output_dir / "meraki_recon"
+    meraki_dir.mkdir(exist_ok=True)
+
+    meraki_aps = []
+    bssid_to_ssids: dict = {}
+    for ap in enriched_aps or []:
+        bssid = ap.get("bssid", "")
+        if _is_meraki_ap(bssid, ap.get("vendor_ies", "")):
+            meraki_aps.append(ap)
+        # Track multi-SSID per BSSID (Meraki AP serving many SSIDs on one radio)
+        if bssid:
+            bssid_to_ssids.setdefault(bssid, []).append(ap.get("ssid", ""))
+
+    if not meraki_aps:
+        log("Meraki recon: no Meraki APs identified")
+        status("p_meraki", "Phase 0-III: Meraki Infrastructure Reconnaissance",
+               "complete", "no Meraki APs")
+        return
+
+    log(f"Meraki recon: {len(meraki_aps)} Meraki AP(s) identified")
+    for ap in meraki_aps:
+        bssid = ap.get("bssid", "")
+        ssid  = ap.get("ssid", "")
+        vendor, product_line = _oui_lookup(bssid)
+
+        finding_from_cat("AETHER-MERAKI-001",
+                         data={"bssid": bssid, "ssid": ssid, "vendor": vendor,
+                               "product_line": product_line,
+                               "channel": ap.get("channel", "")},
+                         title_override=f"Meraki AP identified: {ssid!r} [{bssid}] ({product_line})")
+
+        # Best-effort firmware identification via beacon IE pattern matching
+        ies = ap.get("vendor_ies", "") or ap.get("rsn_ie", "") or ""
+        if ies:
+            finding_from_cat("AETHER-MERAKI-002",
+                             data={"bssid": bssid, "ssid": ssid,
+                                   "vendor_ies_excerpt": str(ies)[:200]},
+                             title_override=f"Meraki beacon IE captured for fingerprinting: {bssid}")
+
+    # Shared-physical-AP detection (multiple SSIDs per BSSID prefix)
+    bssid_prefix_groups: dict = {}
+    for bssid in bssid_to_ssids:
+        prefix = bssid.upper().replace(":", "")[:8]  # 32-bit prefix
+        bssid_prefix_groups.setdefault(prefix, []).append(bssid)
+
+    multi_ssid_aps = []
+    for prefix, bssids in bssid_prefix_groups.items():
+        if len(bssids) > 1:
+            ssids_on_prefix = sorted({s for b in bssids
+                                       for s in bssid_to_ssids.get(b, []) if s})
+            if len(ssids_on_prefix) > 1:
+                multi_ssid_aps.append({
+                    "bssid_prefix": prefix, "bssids": bssids,
+                    "ssids": ssids_on_prefix,
+                })
+                finding_from_cat("AETHER-MERAKI-003",
+                                 data={"bssid_prefix": prefix, "bssids": bssids,
+                                       "ssids": ssids_on_prefix,
+                                       "ssid_count": len(ssids_on_prefix)},
+                                 title_override=f"Multiple SSIDs on shared physical AP "
+                                                f"(prefix {prefix}): {', '.join(ssids_on_prefix)}")
+
+    (meraki_dir / "meraki_inventory.json").write_text(json.dumps({
+        "meraki_aps": [{
+            "bssid": ap.get("bssid", ""), "ssid": ap.get("ssid", ""),
+            "channel": ap.get("channel", ""),
+            "vendor": _oui_lookup(ap.get("bssid", ""))[0],
+            "product_line": _oui_lookup(ap.get("bssid", ""))[1],
+        } for ap in meraki_aps],
+        "multi_ssid_aps": multi_ssid_aps,
+    }, indent=2), encoding="utf-8")
+
+    status("p_meraki", "Phase 0-III: Meraki Infrastructure Reconnaissance",
+           "complete", f"{len(meraki_aps)} Meraki, {len(multi_ssid_aps)} shared")
+
+
+# ── Phase: EAP-TLS Server Certificate Analysis ────────────────────────────
+
+def phase_server_cert_analysis(target_aps: list, output_dir: Path,
+                                timeout: int = 60) -> None:
+    """Extract EAP-TLS server certificates from captured EAP exchanges,
+    analyze each for weak algorithm, expiry, self-signed status, and
+    internal-CA information disclosure.
+
+    Looks for existing pcap files in subdirectories of output_dir (deauth-
+    handshake capture, wifite capture, etc.). Emits per-cert findings."""
+    status("p_cert", "Phase 0-IV: EAP-TLS Server Certificate Analysis", "running")
+    cert_dir = output_dir / "cert_analysis"
+    cert_dir.mkdir(exist_ok=True)
+
+    # Scan output_dir for all .cap/.pcap/.pcapng files
+    pcap_paths: list = []
+    for ext in ("*.cap", "*.pcap", "*.pcapng"):
+        pcap_paths.extend(output_dir.rglob(ext))
+    if not pcap_paths:
+        log("Cert analysis: no pcap files found in output dir")
+        status("p_cert", "Phase 0-IV: EAP-TLS Server Certificate Analysis",
+               "complete", "no captures")
+        return
+
+    if not shutil.which("tshark"):
+        log("Cert analysis: tshark not installed — skipping")
+        status("p_cert", "Phase 0-IV: EAP-TLS Server Certificate Analysis",
+               "skipped", "tshark missing")
+        return
+
+    cert_summaries: list = []
+    for pcap in pcap_paths:
+        certs_extracted = _extract_certs_from_pcap(pcap, cert_dir, timeout)
+        for cert_info in certs_extracted:
+            cert_summaries.append(cert_info)
+            _evaluate_cert_findings(cert_info, target_aps, cert_dir)
+
+    (cert_dir / "certs_summary.json").write_text(
+        json.dumps(cert_summaries, indent=2, default=str), encoding="utf-8")
+    log(f"Cert analysis: {len(cert_summaries)} server certs extracted/analyzed")
+    status("p_cert", "Phase 0-IV: EAP-TLS Server Certificate Analysis",
+           "complete", f"{len(cert_summaries)} certs analyzed")
+
+
+def _extract_certs_from_pcap(pcap_path: Path, out_dir: Path,
+                              timeout: int) -> list:
+    """Use tshark to extract X.509 certs from TLS handshakes within EAP frames."""
+    extracted: list = []
+    pcap_certs_dir = out_dir / f"{pcap_path.stem}_certs"
+    try:
+        pcap_certs_dir.mkdir(exist_ok=True)
+        # tshark export of tls.handshake.certificate elements
+        out, rc = _run([
+            "tshark", "-r", str(pcap_path),
+            "-Y", "tls.handshake.certificate or eap.type == 13",
+            "--export-objects", f"tls,{pcap_certs_dir}",
+        ], timeout=timeout)
+        if rc != 0:
+            return extracted
+        # Find any .pem / .crt / .der files produced
+        for cert_file in pcap_certs_dir.iterdir():
+            if cert_file.is_file() and cert_file.stat().st_size > 0:
+                cert_info = _analyze_x509_cert(cert_file)
+                if cert_info:
+                    cert_info["source_pcap"] = str(pcap_path)
+                    cert_info["cert_file"] = str(cert_file)
+                    extracted.append(cert_info)
+    except Exception as exc:
+        err(f"Cert extraction from {pcap_path.name}: {exc}")
+    return extracted
+
+
+def _analyze_x509_cert(cert_path: Path) -> dict | None:
+    """Use openssl x509 to parse a cert file. Returns a dict of analyzed fields
+    or None if parsing failed."""
+    try:
+        # Try PEM first, fall back to DER
+        for in_form in ("PEM", "DER"):
+            out, rc = _run([
+                "openssl", "x509", "-in", str(cert_path),
+                "-inform", in_form, "-text", "-noout",
+            ], timeout=15)
+            if rc == 0 and "Certificate:" in out:
+                return _parse_openssl_text(out, str(cert_path))
+    except Exception as exc:
+        err(f"  cert parse failed for {cert_path.name}: {exc}")
+    return None
+
+
+def _parse_openssl_text(openssl_out: str, cert_path: str) -> dict:
+    """Parse the output of `openssl x509 -text -noout` into structured fields."""
+    info: dict = {"cert_path": cert_path, "raw_excerpt": openssl_out[:500]}
+    import re as _re
+
+    m = _re.search(r'Signature Algorithm:\s*(\S+)', openssl_out)
+    if m:
+        info["signature_algorithm"] = m.group(1)
+        sa = m.group(1).lower()
+        info["weak_algorithm"] = ("sha1" in sa or "md5" in sa or "md2" in sa)
+
+    m = _re.search(r'Public-Key:\s*\((\d+)\s*bit\)', openssl_out)
+    if m:
+        info["public_key_bits"] = int(m.group(1))
+        info["weak_key_length"] = (int(m.group(1)) < 2048
+                                    and "rsa" in (info.get("signature_algorithm","").lower()))
+
+    m = _re.search(r'Issuer:\s*(.+)', openssl_out)
+    if m:
+        info["issuer"] = m.group(1).strip()
+    m = _re.search(r'Subject:\s*(.+)', openssl_out)
+    if m:
+        info["subject"] = m.group(1).strip()
+        info["self_signed"] = info.get("issuer", "") == info["subject"]
+
+    m = _re.search(r'Not Before:\s*(.+)', openssl_out)
+    if m:
+        info["not_before"] = m.group(1).strip()
+    m = _re.search(r'Not After\s*:\s*(.+)', openssl_out)
+    if m:
+        info["not_after"] = m.group(1).strip()
+        # Best-effort expiry parsing
+        try:
+            from datetime import datetime as _dt
+            for fmt in ("%b %d %H:%M:%S %Y %Z", "%b %d %H:%M:%S %Y GMT"):
+                try:
+                    exp = _dt.strptime(info["not_after"], fmt)
+                    info["expired"]    = exp < _dt.utcnow()
+                    info["days_to_expiry"] = (exp - _dt.utcnow()).days
+                    break
+                except ValueError:
+                    continue
+        except Exception:
+            pass
+
+    # SAN extraction for hostname disclosure analysis
+    m = _re.search(r'X509v3 Subject Alternative Name:\s*\n\s*(.+)', openssl_out)
+    if m:
+        info["subject_alt_names"] = [s.strip() for s in m.group(1).split(",")]
+
+    # Internal-CA heuristic: issuer CN looks like a private/corp CA
+    issuer_str = (info.get("issuer") or "").lower()
+    info["likely_internal_ca"] = any(t in issuer_str for t in [
+        "corp", "internal", "private", "self", "test", "lab", "dev",
+        "intranet", "ad-ca", "ad ca", "domain", "controller",
+    ]) and not any(t in issuer_str for t in [
+        "digicert", "verisign", "godaddy", "globalsign", "letsencrypt",
+        "comodo", "sectigo", "amazon", "google trust", "microsoft", "thawte",
+    ])
+    return info
+
+
+def _evaluate_cert_findings(cert_info: dict, target_aps: list,
+                             cert_dir: Path) -> None:
+    """Emit findings based on the analyzed cert fields."""
+    cert_file = cert_info.get("cert_file", "")
+    issuer = cert_info.get("issuer", "")
+
+    # Always emit an informational finding noting the cert was captured
+    finding_from_cat("AETHER-INFO-CERT-CAPTURED",
+                     data=cert_info,
+                     title_override=f"Server certificate captured from EAP exchange "
+                                    f"(issuer: {issuer[:80]})",
+                     output_file=cert_file)
+
+    if cert_info.get("weak_algorithm"):
+        finding_from_cat("AETHER-CERT-001",
+                         data=cert_info,
+                         title_override=f"Weak server certificate signature algorithm: "
+                                        f"{cert_info.get('signature_algorithm','?')}",
+                         output_file=cert_file)
+    if cert_info.get("weak_key_length"):
+        finding_from_cat("AETHER-CERT-001",
+                         data=cert_info,
+                         title_override=f"Weak server certificate key length: "
+                                        f"{cert_info.get('public_key_bits','?')} bits",
+                         output_file=cert_file)
+    if cert_info.get("expired"):
+        finding_from_cat("AETHER-CERT-002",
+                         data=cert_info,
+                         title_override=f"Server certificate expired: {cert_info.get('not_after','?')}",
+                         output_file=cert_file)
+    elif cert_info.get("days_to_expiry", 999) < 30:
+        finding_from_cat("AETHER-CERT-002",
+                         data=cert_info,
+                         title_override=f"Server certificate expiring in "
+                                        f"{cert_info['days_to_expiry']} days",
+                         output_file=cert_file)
+    if cert_info.get("self_signed"):
+        finding_from_cat("AETHER-CERT-003",
+                         data=cert_info,
+                         title_override=f"Server certificate is self-signed (subject == issuer)",
+                         output_file=cert_file)
+    if cert_info.get("likely_internal_ca"):
+        finding_from_cat("AETHER-CERT-004",
+                         data=cert_info,
+                         title_override=f"Server certificate issuer reveals internal CA: "
+                                        f"{issuer[:120]}",
+                         output_file=cert_file)
+    sans = cert_info.get("subject_alt_names") or []
+    if sans:
+        radius_like = [s for s in sans if any(t in s.lower() for t in
+                       ["radius", "nps", "ise", "auth", "freeradius"])]
+        if radius_like:
+            finding_from_cat("AETHER-CERT-005",
+                             data={**cert_info, "radius_hostnames": radius_like},
+                             title_override=f"Server cert SAN reveals RADIUS hostname(s): "
+                                            f"{', '.join(radius_like[:3])}",
+                             output_file=cert_file)
+
+    # Positive finding when everything looks good
+    if (not cert_info.get("weak_algorithm") and
+        not cert_info.get("weak_key_length") and
+        not cert_info.get("expired") and
+        not cert_info.get("self_signed") and
+        not cert_info.get("likely_internal_ca")):
+        finding_from_cat("AETHER-CERT-006",
+                         data=cert_info,
+                         title_override=f"Server certificate uses strong modern algorithm "
+                                        f"and valid public-CA chain (positive)",
+                         output_file=cert_file)
+
+
+# ── Phase: Meraki iPSK Detection + MAC-Spoof Inheritance Test ─────────────
+
+def phase_ipsk_test(monitor_iface: str, primary_iface: str,
+                     enriched_aps: list, output_dir: Path,
+                     timeout: int = 120) -> None:
+    """Detect Meraki iPSK SSIDs (WPA2-PSK with per-MAC PSK assignment) by
+    observing PMKID-per-client variance, then test MAC-spoofing inheritance
+    when an iPSK is suspected and a known iPSK-issued MAC is observable."""
+    status("p_ipsk", "Phase 0-V: Meraki iPSK Test", "running")
+    ipsk_dir = output_dir / "ipsk_test"
+    ipsk_dir.mkdir(exist_ok=True)
+
+    # Candidates: WPA2-PSK SSIDs on Meraki APs with multiple associated clients
+    candidates = []
+    for ap in enriched_aps or []:
+        bssid = ap.get("bssid", "")
+        if not _is_meraki_ap(bssid, ap.get("vendor_ies", "")):
+            continue
+        auth_type = _classify_auth_type(ap.get("encryption",""), ap.get("auth",""))
+        if auth_type != "WPA2-PSK":
+            continue
+        clients = ap.get("clients") or []
+        if len(clients) >= 2:
+            candidates.append(ap)
+
+    if not candidates:
+        log("iPSK test: no Meraki WPA2-PSK SSIDs with multiple clients")
+        status("p_ipsk", "Phase 0-V: Meraki iPSK Test", "complete", "no candidates")
+        return
+
+    for ap in candidates:
+        bssid = ap.get("bssid", "")
+        ssid  = ap.get("ssid", "")
+        channel = int(ap.get("channel") or 6)
+        clients = ap.get("clients") or []
+
+        # Heuristic: capture per-client PMKIDs and compare
+        # If PMKIDs differ per client on the same SSID, it's an iPSK (each client
+        # has a unique PMK derived from a different PSK)
+        pmkid_dump = ipsk_dir / f"{ssid.replace(' ','_')}_pmkid.pcapng"
+        try:
+            _run([
+                "hcxdumptool", "-i", monitor_iface, "-o", str(pmkid_dump),
+                "--enable_status=1",
+                "--filterlist_ap=" + str(bssid.replace(":","").lower()),
+                "--filtermode=2",
+            ], timeout=min(timeout, 60))
+        except Exception as exc:
+            err(f"  iPSK PMKID capture for {ssid!r}: {exc}")
+            continue
+
+        if not pmkid_dump.exists():
+            continue
+
+        # Convert to hashes and count distinct PMKIDs
+        hash_file = ipsk_dir / f"{ssid.replace(' ','_')}_pmkids.hc22000"
+        try:
+            _run(["hcxpcapngtool", "-o", str(hash_file), str(pmkid_dump)],
+                 timeout=30)
+        except Exception:
+            pass
+
+        distinct_pmkids = 0
+        if hash_file.exists():
+            try:
+                lines = [l for l in hash_file.read_text().splitlines()
+                         if l.strip() and l.startswith("WPA*")]
+                # PMKID hash is field 3 (0-indexed) in the 22000 format
+                pmkid_set = {l.split("*")[3] for l in lines if len(l.split("*")) > 3}
+                distinct_pmkids = len(pmkid_set)
+            except Exception:
+                pass
+
+        ipsk_evidence = {
+            "bssid": bssid, "ssid": ssid, "channel": channel,
+            "client_count": len(clients), "distinct_pmkids": distinct_pmkids,
+            "pmkid_hash_file": str(hash_file) if hash_file.exists() else "",
+        }
+
+        if distinct_pmkids > 1:
+            finding_from_cat("AETHER-IPSK-002",
+                             data=ipsk_evidence,
+                             title_override=f"iPSK suspected on {ssid!r}: "
+                                            f"{distinct_pmkids} distinct PMKIDs across "
+                                            f"{len(clients)} clients",
+                             output_file=str(hash_file))
+            # If this SSID coexists with an EAP-TLS SSID on the same physical AP
+            cert_auth_on_same_ap = any(
+                _classify_auth_type(other.get("encryption",""),
+                                     other.get("auth","")) in ("WPA2-Enterprise",
+                                                                "WPA3-Enterprise")
+                and other.get("bssid","").upper()[:8] == bssid.upper()[:8]
+                for other in enriched_aps if other is not ap
+            )
+            if cert_auth_on_same_ap:
+                finding_from_cat("AETHER-IPSK-003",
+                                 data=ipsk_evidence,
+                                 title_override=f"iPSK deployed alongside cert-auth SSID "
+                                                f"on same physical AP: {ssid!r}")
+        else:
+            _emit_info("iPSK",
+                       f"WPA2-PSK Meraki SSID {ssid!r}: only {distinct_pmkids} PMKID "
+                       f"observed — not iPSK or insufficient client diversity",
+                       data=ipsk_evidence)
+
+    status("p_ipsk", "Phase 0-V: Meraki iPSK Test", "complete",
+           f"{len(candidates)} candidates evaluated")
+
+
+# ── Phase: Captive Portal / Splash Bypass Testing ─────────────────────────
+
+def phase_captive_portal_test(target_aps: list, output_dir: Path,
+                                primary_iface: str = "",
+                                timeout: int = 60) -> None:
+    """Probe captive portals (Meraki splash pages) for MAC-spoof session
+    inheritance, DNS/ICMP bypass, and information disclosure.
+
+    Requires the test host to actually associate to an open guest SSID for
+    full coverage; in monitor-mode-only operation only the passive disclosure
+    findings are emitted."""
+    status("p_splash", "Phase 0-VI: Captive Portal / Splash Bypass Testing", "running")
+    splash_dir = output_dir / "captive_portal"
+    splash_dir.mkdir(exist_ok=True)
+
+    # Identify open SSIDs that may have splash pages
+    open_ssids = [ap for ap in target_aps or []
+                  if _classify_auth_type(ap.get("encryption",""),
+                                          ap.get("auth","")) == "OPEN"]
+    if not open_ssids:
+        log("Captive portal: no open SSIDs in scope")
+        status("p_splash", "Phase 0-VI: Captive Portal / Splash Bypass Testing",
+               "complete", "no open SSIDs")
+        return
+
+    for ap in open_ssids:
+        ssid  = ap.get("ssid", "")
+        bssid = ap.get("bssid", "")
+        is_meraki = _is_meraki_ap(bssid, ap.get("vendor_ies", ""))
+
+        _emit_info("Captive Portal",
+                   f"Open SSID identified (may have captive portal): "
+                   f"{ssid!r} [{bssid}]",
+                   data={"bssid": bssid, "ssid": ssid, "is_meraki": is_meraki})
+
+        if not primary_iface:
+            # No managed-mode iface available for active connection test
+            _emit_info("Captive Portal",
+                       f"Splash active-bypass tests skipped for {ssid!r}: "
+                       f"no managed-mode interface available",
+                       data={"bssid": bssid, "ssid": ssid})
+            continue
+
+        # Active tests (only if primary_iface available + RoE allows)
+        bypass_results = {
+            "ssid": ssid, "bssid": bssid, "is_meraki": is_meraki,
+            "dns_bypass": None, "icmp_bypass": None, "splash_url": "",
+        }
+
+        # 1. Attempt DNS resolution before splash auth — tests if DNS escapes
+        try:
+            out, rc = _run(["dig", "+time=3", "+tries=1",
+                            "@8.8.8.8", "example.com"], timeout=8)
+            if rc == 0 and "ANSWER SECTION" in out:
+                bypass_results["dns_bypass"] = True
+                finding_from_cat("AETHER-SPLASH-002",
+                                 data=bypass_results,
+                                 title_override=f"Captive portal DNS bypass on {ssid!r}: "
+                                                f"DNS queries to external resolvers succeed "
+                                                f"before splash auth")
+            else:
+                bypass_results["dns_bypass"] = False
+        except Exception:
+            pass
+
+        # 2. ICMP bypass test
+        try:
+            out, rc = _run(["ping", "-c", "2", "-W", "2", "8.8.8.8"], timeout=10)
+            if rc == 0 and "0% packet loss" in out:
+                bypass_results["icmp_bypass"] = True
+                finding_from_cat("AETHER-SPLASH-003",
+                                 data=bypass_results,
+                                 title_override=f"Captive portal ICMP bypass on {ssid!r}: "
+                                                f"external ICMP echo succeeds before splash auth")
+            else:
+                bypass_results["icmp_bypass"] = False
+        except Exception:
+            pass
+
+        # 3. Splash page fingerprint via HTTP redirect
+        try:
+            out, rc = _run(["curl", "-sS", "-I", "-L", "-m", "5",
+                             "http://example.com"], timeout=10)
+            if rc == 0:
+                splash_indicators = []
+                if "location" in out.lower():
+                    splash_indicators.append("HTTP redirect intercepted")
+                if any(t in out.lower() for t in ["meraki", "splash", "auth.cisco", "cisco"]):
+                    splash_indicators.append("Meraki splash signature present")
+                if splash_indicators:
+                    bypass_results["splash_url"] = out[:500]
+                    finding_from_cat("AETHER-SPLASH-004",
+                                     data={**bypass_results,
+                                           "splash_headers_excerpt": out[:600],
+                                           "indicators": splash_indicators},
+                                     title_override=f"Captive portal headers reveal AP/vendor "
+                                                    f"info on {ssid!r}")
+        except Exception:
+            pass
+
+        (splash_dir / f"{ssid.replace(' ','_')}_splash.json").write_text(
+            json.dumps(bypass_results, indent=2), encoding="utf-8")
+
+    status("p_splash", "Phase 0-VI: Captive Portal / Splash Bypass Testing",
+           "complete", f"{len(open_ssids)} open SSIDs probed")
+
+
+# ── Phase: EAP-TLS Identity Disclosure Analysis ────────────────────────────
+
+def phase_eaptls_identity_analysis(output_dir: Path, timeout: int = 30) -> None:
+    """Parse captured EAPOL frames for EAP-Response/Identity messages and
+    flag any that leak username@realm (rather than anonymous@realm)."""
+    status("p_eaptls_id", "Phase 0-VII: EAP-TLS Identity Disclosure Analysis",
+           "running")
+    id_dir = output_dir / "eap_identity"
+    id_dir.mkdir(exist_ok=True)
+
+    pcap_paths: list = []
+    for ext in ("*.cap", "*.pcap", "*.pcapng"):
+        pcap_paths.extend(output_dir.rglob(ext))
+    if not pcap_paths or not shutil.which("tshark"):
+        status("p_eaptls_id", "Phase 0-VII: EAP-TLS Identity Disclosure Analysis",
+               "complete", "no captures or tshark missing")
+        return
+
+    identities: list = []
+    for pcap in pcap_paths:
+        try:
+            out, rc = _run([
+                "tshark", "-r", str(pcap),
+                "-Y", "eap.code == 2 and eap.identity",
+                "-T", "fields", "-e", "eap.identity",
+            ], timeout=timeout)
+            if rc == 0 and out.strip():
+                for line in out.strip().splitlines():
+                    ident = line.strip()
+                    if ident and ident not in identities:
+                        identities.append(ident)
+        except Exception:
+            pass
+
+    for ident in identities:
+        is_anon = (ident.lower().startswith("anonymous@") or
+                   ident == "anonymous" or ident.startswith("@"))
+        finding_from_cat("AETHER-INFO-EAP-IDENTITY",
+                         data={"identity": ident, "is_anonymous": is_anon},
+                         title_override=f"EAP outer Identity observed: {ident!r}")
+        if not is_anon and "@" in ident:
+            finding_from_cat("AETHER-EAPTLS-001",
+                             data={"identity": ident, "username": ident.split("@")[0],
+                                   "realm": ident.split("@")[1]},
+                             title_override=f"EAP outer Identity leaks user-realm format: "
+                                            f"{ident!r}")
+
+    (id_dir / "eap_identities.json").write_text(
+        json.dumps({"identities": identities}, indent=2), encoding="utf-8")
+    status("p_eaptls_id", "Phase 0-VII: EAP-TLS Identity Disclosure Analysis",
+           "complete", f"{len(identities)} identities observed")
 
 
 def main():
