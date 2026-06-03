@@ -53,7 +53,7 @@ import struct
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-VERSION = "1.10.0"
+VERSION = "1.11.0"
 
 
 def _clients_base() -> Path:
@@ -463,6 +463,44 @@ def _generate_ssid_wordlist(ssid: str, base_wordlist: str | None) -> str | None:
     except Exception as exc:
         err(f"SSID wordlist generation failed: {exc}")
         return base_wordlist
+
+
+def _concat_wordlists(wordlists: list[str]) -> str | None:
+    """Concatenate multiple base wordlists into a single deduplicated temp file.
+
+    Filters to WPA passphrase length bounds (8-63 chars) per entry and preserves
+    the order of input lists (so operator-prioritised lists like Spectre's
+    probable-v2-wpa-top4800.txt land before rockyou.txt). Returns the temp file
+    path, or None if no input files exist or are non-empty.
+    """
+    existing = [w for w in (wordlists or []) if w and os.path.exists(w)]
+    if not existing:
+        return None
+    if len(existing) == 1:
+        return existing[0]
+    try:
+        seen: set = set()
+        count = 0
+        tmp = tempfile.NamedTemporaryFile(
+            mode="w", suffix="-merged.txt", delete=False, encoding="utf-8"
+        )
+        for wl_path in existing:
+            try:
+                with open(wl_path, encoding="utf-8", errors="replace") as f:
+                    for line in f:
+                        line = line.rstrip("\n").rstrip("\r")
+                        if 8 <= len(line) <= 63 and line not in seen:
+                            seen.add(line)
+                            tmp.write(line + "\n")
+                            count += 1
+            except Exception as exc:
+                err(f"  [merge] Failed to read {wl_path}: {exc}")
+        tmp.close()
+        log(f"  Merged {len(existing)} wordlists → {count} unique entries → {tmp.name}")
+        return tmp.name
+    except Exception as exc:
+        err(f"Wordlist merge failed: {exc}")
+        return existing[0] if existing else None
 
 
 def _build_domain_wordlist(domains: list[str], base_wordlist: str | None) -> str | None:
@@ -4096,8 +4134,16 @@ def run(config: dict, project: str) -> None:
         err(f"Aborting: interface '{interface}' not available.")
         return
 
-    # Build wordlists before phases start (website scrape → domain derivation → base)
-    _effective_wl = wordlist
+    # Build wordlists before phases start
+    # Stack order: base list(s) → website scrape → domain derivation
+    # When multiple base wordlists are given (list[str]) they are merged into one
+    # deduplicated file first. The merged base is then extended by the targeted
+    # scrape/domain mutations as before.
+    if isinstance(wordlist, list):
+        _effective_wl = _concat_wordlists(wordlist)
+        log(f"Base wordlist(s) merged: {len(wordlist)} sources → {_effective_wl}")
+    else:
+        _effective_wl = wordlist
     if scrape_url:
         _scraped = _build_website_wordlist(scrape_url, scrape_depth, _effective_wl)
         if _scraped:
@@ -4105,7 +4151,7 @@ def run(config: dict, project: str) -> None:
             _effective_wl = _scraped
     _effective_wl = _build_domain_wordlist(domains, _effective_wl)
     if _effective_wl and _effective_wl != wordlist:
-        log(f"Domain wordlist active: {_effective_wl}")
+        log(f"Effective wordlist for cracking: {_effective_wl}")
 
     active_monitor = enable_monitor_mode(interface, monitor_iface)
 
@@ -4305,8 +4351,10 @@ Examples:
                         help="Lock scan to this channel")
     parser.add_argument("--timeout", "-t", type=int,
                         help="Per-phase timeout seconds")
-    parser.add_argument("--wordlist", "-w",
-                        help="Wordlist for WPA cracking")
+    parser.add_argument("--wordlist", "-w", action="append", dest="wordlists",
+                        metavar="WORDLIST",
+                        help="Wordlist for WPA cracking (repeatable; multiple lists are "
+                             "concatenated and deduplicated into a single base wordlist)")
     parser.add_argument("--scope-bssid", action="append", dest="scope_bssids",
                         metavar="BSSID",
                         help="Scope whitelist BSSID (repeatable); attacks blocked outside scope")
@@ -4430,8 +4478,10 @@ def main():
         config["scan_channel"] = args.channel
     if args.timeout is not None:
         config["timeout_per_phase"] = args.timeout
-    if args.wordlist:
-        config["wordlist"] = args.wordlist
+    if args.wordlists:
+        # Multiple --wordlist flags → list in config; single → string for backward compat
+        config["wordlist"] = (args.wordlists if len(args.wordlists) > 1
+                              else args.wordlists[0])
     if args.scope_bssids:
         config.setdefault("scope", {})["bssids"] = args.scope_bssids
     if args.scope_ssids:

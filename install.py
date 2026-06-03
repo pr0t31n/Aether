@@ -573,6 +573,70 @@ VERIFY_TOOLS = [
 ]
 
 
+def phase_wordlists(dry_run: bool) -> None:
+    """Download SecLists probable-v2-wpa-top4800.txt for Spectre-managed WPA cracking.
+
+    Aether's default base wordlist is rockyou.txt (covered by the kali apt package
+    'wordlists'). Spectre-managed sessions additionally invoke Aether with
+    probable-v2-wpa-top4800.txt for higher-precision WPA-specific coverage. This
+    phase fetches that list to /usr/share/wordlists/ idempotently — if the file
+    is already present and non-empty, the download is skipped."""
+    phase_header("PHASE 6 — WPA WORDLIST DOWNLOAD (SecLists)")
+    wl_dir   = Path("/usr/share/wordlists")
+    target   = wl_dir / "probable-v2-wpa-top4800.txt"
+    url      = ("https://raw.githubusercontent.com/danielmiessler/SecLists/"
+                "refs/heads/master/Passwords/WiFi-WPA/probable-v2-wpa-top4800.txt")
+
+    if target.exists() and target.stat().st_size > 0:
+        success(f"Already present ({target.stat().st_size:,} bytes): {target}")
+        return
+
+    if dry_run:
+        info(f"[DRY-RUN] Would download {url}")
+        info(f"[DRY-RUN] → {target}")
+        return
+
+    if not is_root():
+        warn(f"Not running as root — cannot write to {wl_dir}.")
+        warn(f"Manually: sudo curl -sSL -o {target} {url}")
+        return
+
+    try:
+        wl_dir.mkdir(parents=True, exist_ok=True)
+        info(f"Downloading probable-v2-wpa-top4800.txt → {target}")
+        info(f"Source: {url}")
+
+        # Prefer curl; fall back to wget; fall back to urllib for offline-tolerant envs
+        if shutil.which("curl"):
+            subprocess.run(
+                ["curl", "-sSL", "--retry", "3", "--max-time", "60",
+                 "-o", str(target), url],
+                check=True,
+            )
+        elif shutil.which("wget"):
+            subprocess.run(
+                ["wget", "-q", "--tries=3", "--timeout=60",
+                 "-O", str(target), url],
+                check=True,
+            )
+        else:
+            import urllib.request as _u
+            _u.urlretrieve(url, str(target))
+
+        if target.exists() and target.stat().st_size > 0:
+            target.chmod(0o644)
+            success(f"Downloaded {target.stat().st_size:,} bytes: {target}")
+        else:
+            error("Download produced empty file.")
+            error(f"Manually: sudo curl -sSL -o {target} {url}")
+    except subprocess.CalledProcessError as exc:
+        error(f"Download command failed (exit {exc.returncode}).")
+        error(f"Manually: sudo curl -sSL -o {target} {url}")
+    except Exception as exc:
+        error(f"Download failed: {exc}")
+        error(f"Manually: sudo curl -sSL -o {target} {url}")
+
+
 def phase_verify() -> None:
     phase_header("POST-INSTALL SUMMARY")
     all_ok = True
@@ -697,6 +761,9 @@ def main() -> None:
         phase_service(os_id, dry_run)
     else:
         warn("Not running as root — skipping service installation.")
+
+    # Phase 6 — WPA wordlists (SecLists probable-v2-wpa-top4800.txt for Spectre-managed runs)
+    phase_wordlists(dry_run)
 
     # Verify
     phase_verify()
