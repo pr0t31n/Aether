@@ -53,7 +53,7 @@ import struct
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-VERSION = "1.12.0"
+VERSION = "1.12.3"
 
 
 def _clients_base() -> Path:
@@ -223,12 +223,51 @@ def finding_from_cat(cat_id: str, data: dict | None = None,
     )
 
 
+# Title-based merge for the inventory informational findings.  Pattern is the
+# same as Scattershot3's add_finding() merge (writer-side): same canonical
+# title → collapse into a single entry, accumulating per-AP detail into
+# data["merged_records"] and into the affected list at universal-synthesis time.
+_AETHER_MERGE_TITLES = {
+    "Wireless Access Points Observed (Inventory)",
+    "Authentication Types Classified (Inventory)",
+    "Wireless Vendors Identified (Inventory)",
+    "Channel Allocations Observed (Inventory)",
+}
+
+def _merge_native_findings(records: list) -> list:
+    """Collapse inventory-style INFO findings emitted once per AP into a
+    single per-title finding.  Non-inventory findings pass through unchanged."""
+    merged: dict[str, dict] = {}
+    out: list = []
+    for rec in records:
+        if not isinstance(rec, dict):
+            out.append(rec); continue
+        title = rec.get("title") or ""
+        if title in _AETHER_MERGE_TITLES:
+            data = rec.get("data") or {}
+            if title in merged:
+                merged[title]["data"].setdefault("merged_records", []).append(data)
+            else:
+                new_rec = dict(rec)
+                new_rec["data"] = {
+                    **{k: v for k, v in data.items() if k != "merged_records"},
+                    "merged_records": [data],
+                }
+                merged[title] = new_rec
+                out.append(new_rec)
+        else:
+            out.append(rec)
+    return out
+
+
 def save_findings(output_dir: Path) -> None:
+    consolidated = _merge_native_findings(_findings_collected)
     out = output_dir / "findings_spectre.json"
-    out.write_text(json.dumps(_findings_collected, indent=2), encoding="utf-8")
-    log(f"Findings written: {out} ({len(_findings_collected)} item(s))")
+    out.write_text(json.dumps(consolidated, indent=2), encoding="utf-8")
+    log(f"Findings written: {out} "
+        f"({len(consolidated)} consolidated; {len(_findings_collected)} raw)")
     # Synthesise universal findings.json + summary.json (schema 1.0) alongside.
-    _u_synthesize_outputs(output_dir, _findings_collected)
+    _u_synthesize_outputs(output_dir, consolidated)
 
 
 def _u_synthesize_outputs(output_dir: Path, native_findings: list) -> None:
@@ -254,6 +293,29 @@ def _u_synthesize_outputs(output_dir: Path, native_findings: list) -> None:
                 _ch_int = int(channel) if channel else 0
             except (ValueError, TypeError):
                 _ch_int = 0
+            # For inventory findings that were merged in _merge_native_findings,
+            # build the affected list from every per-AP record so the consumer
+            # sees one finding with N "ssid (bssid) ch<n>" rows.
+            merged_records = data.get("merged_records") if isinstance(data, dict) else None
+            if merged_records:
+                aff_lines: list[str] = []
+                for mr in merged_records:
+                    if not isinstance(mr, dict): continue
+                    _ssid_m  = mr.get("ssid")  or mr.get("SSID")  or ""
+                    _bssid_m = mr.get("bssid") or mr.get("BSSID") or ""
+                    _ch_m    = mr.get("channel") or mr.get("ch") or ""
+                    _auth_m  = mr.get("auth_type") or ""
+                    _ven_m   = mr.get("vendor") or ""
+                    pieces = [p for p in (_ssid_m, f"({_bssid_m})" if _bssid_m else "",
+                                          f"ch{_ch_m}" if _ch_m else "",
+                                          _auth_m, _ven_m) if p]
+                    if pieces: aff_lines.append(" ".join(pieces))
+                affected = "\n".join(sorted(set(aff_lines)))
+                output_blob = json.dumps(merged_records, indent=2)[:4096]
+            else:
+                affected = f"{ssid} ({bssid})" if ssid or bssid else ""
+                output_blob = json.dumps(data, indent=2)[:4096] if data else ""
+
             mapped.append({
                 "title":       f.get("title", ""),
                 "datetime":    f.get("ts", ""),
@@ -265,12 +327,12 @@ def _u_synthesize_outputs(output_dir: Path, native_findings: list) -> None:
                 "risk":        str(f.get("severity", "INFO")).upper(),
                 "command":     f.get("command", ""),
                 "description": f.get("description", ""),
-                "output":      json.dumps(data, indent=2)[:4096] if data else "",
+                "output":      output_blob,
                 "output_file": f.get("output_file", ""),
                 "cves":        ",".join(f.get("cves", []) or []),
                 "sources":     "aether",
                 "service":     "wifi",
-                "affected":    f"{ssid} ({bssid})" if ssid or bssid else "",
+                "affected":    affected,
                 "remediation": f.get("remediation", "Review wireless configuration."),
                 "owasp":       "", "owasp_url": "", "nist": "",
                 "exploitdb":   False, "metasploit": False, "exploit_details": [],
@@ -2072,9 +2134,30 @@ def phase_wifite(
     def _parse_output(out_lines: list[str], ssid: str, out_file: Path) -> None:
         seen: set[str] = set()
         for line in out_lines:
-            if re.search(r'WPA.*?key.*?:.*?\S|Cracked|password', line, re.I):
-                m = re.search(r'(?:key|password)[:\s]+(\S+)', line, re.I)
-                psk   = m.group(1) if m else "(see output)"
+            # Negative-match guard: wifite2 prints lines like
+            #   "[!] Skipping. Target is using WPA-Enterprise and can not be cracked."
+            # and the literal substring "cracked" used to trip the old positive
+            # regex below.  Skip these phrases before any success matching.
+            if re.search(
+                r'(?:can\s*not\s*be\s*cracked|cannot\s*be\s*cracked'
+                r'|WPA[- ]?Enterprise|skipping[\.\s]|marked\s+as\s+failed'
+                r'|target\s+is\s+using\s+wpa-enterprise)',
+                line, re.I
+            ):
+                continue
+            # Positive-match: wifite2 reports a successful crack with explicit
+            # markers — the PSK value is on the same line.  Anchor on those.
+            m = re.search(
+                r'(?:'
+                r'Cracked\s+PMKID\s+Hash'
+                r'|Cracked\s+WPA\s+Handshake\s+PSK'
+                r'|WPA\s+Pre[- ]?Shared\s+Key'
+                r'|cracked\s+wpa[2-3]?\s+key'
+                r')\s*[:\s]+(\S+)',
+                line, re.I,
+            )
+            if m:
+                psk   = m.group(1)
                 title = f"WPA Pre-Shared Key Cracked: {ssid}"
                 if title not in seen:
                     seen.add(title)
@@ -2158,14 +2241,50 @@ def phase_wifite(
         except Exception as exc:
             err(f"wifite2 error ({label}): {exc}")
 
+    # WPA-Enterprise targets do not have a PSK to recover — Phase 1b's tooling
+    # (wifite2 PSK / PMKID / WPS) cannot apply to them.  They are routed to
+    # Phase 2 (EAPHammer + asleap).  Detect via the AP's encryption/auth/cipher
+    # blob: airodump-ng tags enterprise as 'WPA2 EAP', 'MGT', or '802.1X'.
+    def _is_enterprise(ap: dict) -> bool:
+        blob = " ".join([str(ap.get(k, "")) for k in
+                         ("encryption", "auth", "cipher")])
+        return bool(re.search(r'\bWPA\d?\s*EAP\b|Enterprise|\bMGT\b|802\.1X',
+                              blob, re.I))
+
     if target_ssids:
+        # Pre-build a {SSID: BSSID} map from target_aps so each iteration can
+        # pair the right BSSID with the right SSID.  Falls back to operator-
+        # supplied target_bssids (single-SSID case) or omits --bssid entirely
+        # when no match is available.
+        ssid_to_bssid = {a.get("ssid"): a.get("bssid")
+                         for a in target_aps if a.get("ssid") and a.get("bssid")}
         for ssid in target_ssids:
+            ap_match = next((a for a in target_aps
+                             if a.get("ssid") == ssid), None)
+            if ap_match and _is_enterprise(ap_match):
+                log(f"[1b] '{ssid}' is WPA-Enterprise — skipping Phase 1b "
+                    "(PSK / PMKID / WPS attacks do not apply; Phase 2 / "
+                    "EAPHammer handles enterprise targets)")
+                continue
             merged_wl = _generate_ssid_wordlist(ssid, wordlist)
             extra = ["--essid", ssid]
-            if target_bssids:
+            # Pair the correct BSSID with this SSID.  Prior versions blindly
+            # used target_bssids[0] for every SSID iteration, so a multi-SSID
+            # campaign always paired the SECOND SSID with the FIRST BSSID and
+            # wifite2's AND-filter never matched — five-minute scans with
+            # zero targets.  v1.12.3 fixes this by looking up per-SSID BSSID.
+            bssid_for_ssid = ssid_to_bssid.get(ssid)
+            if bssid_for_ssid:
+                extra += ["--bssid", bssid_for_ssid]
+            elif target_bssids and len(target_ssids) == 1:
+                # Single-SSID legacy path — the lone BSSID applies.
                 extra += ["--bssid", target_bssids[0]]
+            else:
+                log(f"[1b] '{ssid}': no matching BSSID in intel scan — "
+                    "filtering by ESSID only")
             safe = re.sub(r'[^\w]', '_', ssid)
-            log(f"[1b] wifite2: targeting '{ssid}'")
+            log(f"[1b] wifite2: targeting '{ssid}'"
+                + (f" [{bssid_for_ssid}]" if bssid_for_ssid else ""))
             _run_wifite(extra, wifite_dir / f"wifite_{safe}.txt", ssid, merged_wl)
             # Clean up temp wordlist
             if merged_wl and merged_wl != wordlist and os.path.exists(merged_wl):
@@ -4559,22 +4678,26 @@ def phase_contextual_intel(enriched_aps: list, output_dir: Path) -> None:
         inventory["channels"].add(str(ch))
         inventory["ssids"].add(ssid)
 
+        # NOTE: these three inventory findings deliberately share the same
+        # canonical title across every AP iteration so the Scattershot3-style
+        # merge step in save_findings() collapses them into a single
+        # Informational entry per category with all APs in the affected list.
         finding_from_cat("AETHER-INFO-AP", data=ap_data,
-                         title_override=f"AP observed: {ssid!r} [{bssid}] ch{ch} {auth_type} ({vendor})")
+                         title_override="Wireless Access Points Observed (Inventory)")
 
         finding_from_cat("AETHER-INFO-AUTH-TYPE",
                          data={"bssid": bssid, "ssid": ssid, "auth_type": auth_type,
                                "encryption_raw": enc, "auth_raw": auth},
-                         title_override=f"Authentication type classified: {auth_type} on {ssid!r}")
+                         title_override="Authentication Types Classified (Inventory)")
 
         if vendor != "Unknown":
             finding_from_cat("AETHER-INFO-VENDOR",
                              data={"bssid": bssid, "vendor": vendor, "product_line": line},
-                             title_override=f"Vendor identified: {vendor} ({line}) — {bssid}")
+                             title_override="Wireless Vendors Identified (Inventory)")
 
         finding_from_cat("AETHER-INFO-CHANNEL",
                          data={"bssid": bssid, "ssid": ssid, "channel": ch},
-                         title_override=f"Channel allocation: {ssid!r} on ch{ch}")
+                         title_override="Channel Allocations Observed (Inventory)")
 
         # Per-client catalog within this AP
         for client in (ap.get("clients") or []):
