@@ -53,7 +53,7 @@ import struct
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-VERSION = "1.12.3"
+VERSION = "1.12.4"
 
 
 def _clients_base() -> Path:
@@ -73,12 +73,30 @@ def _build_project_dir(client_short: str, start_date: str, tool_name: str) -> Pa
     """
     Build a structured project directory:
       <clients_base>/<client_short>/<year>/<tool_name>/<client_short>_<datetime>/
+
+    v1.12.4: when the caller supplies no client_short, the slug now resolves
+    to 'adhoc_<timestamp>' rather than the static 'client' literal that earlier
+    versions used.  Without that change, every Aether invocation that omitted
+    both --project AND client_short in config silently dumped its data into
+    /clients/client/<year>/aether/, creating an ever-growing pile of stub
+    directories next to the legitimate per-client trees.  A loud warning is
+    emitted to stderr so the operator can see when the fallback fires.
     """
     import re as _re
-    slug = _re.sub(r'[^\w-]', '_', (client_short or 'client').strip().lower()).strip('_') or 'client'
+    raw = (client_short or "").strip()
+    dt_str = datetime.now().strftime('%Y%m%d_%H%M%S')
+    if raw:
+        slug = _re.sub(r'[^\w-]', '_', raw.lower()).strip('_') or f"adhoc_{dt_str}"
+    else:
+        slug = f"adhoc_{dt_str}"
+        print(
+            "[Aether] WARNING: no client_short supplied and --project omitted; "
+            f"writing to fallback slug '/clients/{slug}/'.  Set client_short "
+            "in config.json or pass --project to land in the right client tree.",
+            flush=True, file=sys.stderr,
+        )
     year = (start_date[:4] if start_date and len(start_date) >= 4 and start_date[:4].isdigit()
             else datetime.now().strftime('%Y'))
-    dt_str = datetime.now().strftime('%Y%m%d_%H%M%S')
     path = _clients_base() / slug / year / tool_name / f"{slug}_{dt_str}"
     path.mkdir(parents=True, exist_ok=True)
     return path
@@ -5357,6 +5375,10 @@ def main():
         # Use tool-specific name from TOOLS registry if this is a variant (aether-z, etc.)
         _tool_key = os.environ.get("SPECTRE_TOOL_ID", "aether")
         args.project = str(_build_project_dir(_cs, _sd, _tool_key))
+    # Announce the resolved project dir so the operator can see exactly where
+    # this run is writing — quiet defaults to a wrong slug were the symptom that
+    # produced "/clients/client/2026/aether/" clutter on Linux benches.
+    print(f"[Aether v{VERSION}] Project directory: {args.project}", flush=True)
     _write_project_meta(
         Path(args.project),
         tool=os.environ.get("SPECTRE_TOOL_ID", "aether"),
