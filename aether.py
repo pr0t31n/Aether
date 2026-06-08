@@ -53,7 +53,7 @@ import struct
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-VERSION = "1.12.4"
+VERSION = "1.12.5"
 
 
 def _clients_base() -> Path:
