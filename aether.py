@@ -53,7 +53,7 @@ import struct
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-VERSION = "1.13.0"
+VERSION = "1.13.1"
 
 
 def _clients_base() -> Path:
@@ -1037,7 +1037,7 @@ def _nm_set_unmanaged(interface: str, unmanaged: bool) -> None:
         return
     state = "no" if unmanaged else "yes"
     _run(["sudo", "nmcli", "device", "set", interface, "managed", state],
-         check=False, timeout=5)
+         timeout=5)
 
 
 def _wpa_supplicant_release(interface: str) -> None:
@@ -1047,7 +1047,7 @@ def _wpa_supplicant_release(interface: str) -> None:
     if not shutil.which("wpa_cli"):
         return
     _run(["sudo", "wpa_cli", "-i", interface, "terminate"],
-         check=False, timeout=5)
+         timeout=5)
 
 
 def _detect_iface_driver(interface: str) -> str:
@@ -1067,9 +1067,9 @@ def _reset_usb_wifi_driver(interface: str) -> None:
     if not drv or drv not in _USB_FRAGILE_DRIVERS:
         return
     log(f"Resetting USB WiFi driver '{drv}' to clear post-monitor-mode state...")
-    _run(["sudo", "modprobe", "-r", drv], check=False, timeout=15)
+    _run(["sudo", "modprobe", "-r", drv], timeout=15)
     time.sleep(2)
-    _run(["sudo", "modprobe", drv], check=False, timeout=15)
+    _run(["sudo", "modprobe", drv], timeout=15)
     # udev + NM need a moment to re-detect the interface
     time.sleep(3)
 
@@ -1209,7 +1209,7 @@ def disable_monitor_mode(monitor_iface: str, original_iface: str) -> None:
     # session (in case airmon-ng decided to anyway).  Idempotent.
     if shutil.which("systemctl"):
         _run(["sudo", "systemctl", "reset-failed", "wpa_supplicant.service"],
-             check=False, timeout=5)
+             timeout=5)
 
     # Step 5: hand the radio back to NetworkManager.  We didn't stop NM, so
     # there's nothing to restart — just lift the per-device unmanaged scope
