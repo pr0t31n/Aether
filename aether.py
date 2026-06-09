@@ -53,7 +53,7 @@ import struct
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-VERSION = "1.12.5"
+VERSION = "1.13.0"
 
 
 def _clients_base() -> Path:
@@ -1016,6 +1016,104 @@ def _build_website_wordlist(url: str, max_depth: int,
 
 # ── Monitor mode management ───────────────────────────────────────────────────
 
+# Known-fragile USB WiFi drivers that benefit from a modprobe -r/modprobe
+# cycle after monitor-mode use.  These chipsets leak firmware state that
+# later operations (NM scans, MAC rotations, channel hops) can wedge on.
+# Built-in/PCIe radios are not affected and are skipped automatically.
+_USB_FRAGILE_DRIVERS = {
+    "mt76x2u", "mt76x0u", "mt76", "mt7601u",
+    "rtl8812au", "rtl88xxau", "rtl8814au", "8821au", "rtl8xxxu",
+}
+
+
+def _nm_set_unmanaged(interface: str, unmanaged: bool) -> None:
+    """Toggle NetworkManager's per-device management for `interface`.
+    Replaces 'airmon-ng check kill' — surgical instead of nuclear.  Other
+    interfaces (eth0, bridges, OpenVPN, ZeroTier) keep their NM management.
+    Session-scoped; does not persist across NM restarts (which is exactly
+    what we want for a session-bounded exclusion).  Silent no-op on systems
+    without nmcli."""
+    if not shutil.which("nmcli"):
+        return
+    state = "no" if unmanaged else "yes"
+    _run(["sudo", "nmcli", "device", "set", interface, "managed", state],
+         check=False, timeout=5)
+
+
+def _wpa_supplicant_release(interface: str) -> None:
+    """Politely ask wpa_supplicant to release its hold on `interface`.
+    Soft equivalent to killing wpa_supplicant for one iface — leaves the
+    daemon alive for other interfaces.  Silent no-op without wpa_cli."""
+    if not shutil.which("wpa_cli"):
+        return
+    _run(["sudo", "wpa_cli", "-i", interface, "terminate"],
+         check=False, timeout=5)
+
+
+def _detect_iface_driver(interface: str) -> str:
+    """Return the kernel module name backing `interface`, or '' if unknown."""
+    p = Path("/sys/class/net") / interface / "device/driver/module"
+    try:
+        return p.resolve().name
+    except (OSError, FileNotFoundError):
+        return ""
+
+
+def _reset_usb_wifi_driver(interface: str) -> None:
+    """Unload and reload the USB-WiFi driver for `interface` to clear
+    post-monitor-mode chip-firmware state.  Only runs for drivers in
+    _USB_FRAGILE_DRIVERS; built-in radios are skipped."""
+    drv = _detect_iface_driver(interface)
+    if not drv or drv not in _USB_FRAGILE_DRIVERS:
+        return
+    log(f"Resetting USB WiFi driver '{drv}' to clear post-monitor-mode state...")
+    _run(["sudo", "modprobe", "-r", drv], check=False, timeout=15)
+    time.sleep(2)
+    _run(["sudo", "modprobe", drv], check=False, timeout=15)
+    # udev + NM need a moment to re-detect the interface
+    time.sleep(3)
+
+
+def _verify_radio_health(interface: str, timeout: int = 10) -> tuple[bool, str]:
+    """Probe the radio to confirm it's responsive.  Returns (ok, reason).
+
+    Three checks, in order:
+      1. Interface exists in /sys/class/net
+      2. 'iw dev <iface> info' completes within timeout
+      3. A short passive scan completes (driver is processing requests)
+
+    Used at session start (fail fast on wedged radio) and end (catch
+    teardown leaving a half-broken state)."""
+    sys_net = Path("/sys/class/net") / interface
+    if not sys_net.exists():
+        return False, f"Interface {interface} not present"
+    if not shutil.which("iw"):
+        return True, "iw not available — skipping driver-level checks"
+    try:
+        rc = subprocess.run(
+            ["sudo", "iw", "dev", interface, "info"],
+            capture_output=True, timeout=timeout,
+        )
+        if rc.returncode != 0:
+            return False, ("iw info failed: " +
+                           rc.stderr.decode("utf-8", "replace")[:120])
+    except subprocess.TimeoutExpired:
+        return False, "iw info timed out — driver may be wedged"
+    # Lightweight passive scan — driver hangs surface here
+    try:
+        rc = subprocess.run(
+            ["sudo", "iw", "dev", interface, "scan", "passive"],
+            capture_output=True, timeout=timeout,
+        )
+        # "Network is down" on a managed iface that's still link-down is OK
+        if rc.returncode != 0 and b"Network is down" not in rc.stderr:
+            return False, ("scan failed: " +
+                           rc.stderr.decode("utf-8", "replace")[:120])
+    except subprocess.TimeoutExpired:
+        return False, "scan timed out — driver wedged"
+    return True, "healthy"
+
+
 def enable_monitor_mode(interface: str, monitor_iface: str) -> str:
     log(f"Enabling monitor mode on {interface}...")
     sys_net = Path("/sys/class/net")
@@ -1031,7 +1129,15 @@ def enable_monitor_mode(interface: str, monitor_iface: str) -> str:
 
     if shutil.which("airmon-ng"):
         pre = _net_ifaces()
-        _run(["sudo", "airmon-ng", "check", "kill"])
+        # Surgical NM exclusion instead of `airmon-ng check kill`.  The legacy
+        # `check kill` SIGKILLs wpa_supplicant and stops NetworkManager
+        # globally — destructive on always-on appliances that rely on NM for
+        # OpenVPN/bridge/ZeroTier management.  `nmcli device set <iface>
+        # managed no` only tells NM to stop touching the attack radio; all
+        # other interfaces stay managed.  Falls back to no-op on systems
+        # without nmcli.
+        _nm_set_unmanaged(interface, unmanaged=True)
+        _wpa_supplicant_release(interface)
         out, _ = _run(["sudo", "airmon-ng", "start", interface])
         time.sleep(2)
         post = _net_ifaces()
@@ -1091,15 +1197,38 @@ def disable_monitor_mode(monitor_iface: str, original_iface: str) -> None:
             _run(["sudo", "iwconfig", original_iface, "mode", "managed"], timeout=5)
         _run(["sudo", "ip", "link", "set", original_iface, "up"], timeout=5)
 
-    # Step 3: restart NetworkManager so it re-acquires the interface.
-    # Do NOT also restart wpa_supplicant separately — NetworkManager manages
-    # its own wpa_supplicant instance; a standalone restart races against NM
-    # and leaves the interface unmanaged.
-    if sys.platform.startswith("linux"):
-        if shutil.which("systemctl"):
-            _run(["sudo", "systemctl", "restart", "NetworkManager"], timeout=20)
-        elif shutil.which("service"):
-            _run(["sudo", "service", "NetworkManager", "restart"], timeout=20)
+    # Step 3: hard-reset known-fragile USB WiFi drivers.  mt76x2u and the
+    # rtl88xxau family leak chip-firmware state after monitor-mode use that
+    # later NM scans can wedge on (observed: Pi 4 + mt76x2u + 1h42m post-
+    # session NM scan → kernel hang → hardware watchdog reset).  No-op for
+    # built-in/PCIe radios.
+    _reset_usb_wifi_driver(original_iface)
+
+    # Step 4: clear any failed-state on wpa_supplicant.service so it can be
+    # restarted cleanly by NM later, even though we didn't kill it this
+    # session (in case airmon-ng decided to anyway).  Idempotent.
+    if shutil.which("systemctl"):
+        _run(["sudo", "systemctl", "reset-failed", "wpa_supplicant.service"],
+             check=False, timeout=5)
+
+    # Step 5: hand the radio back to NetworkManager.  We didn't stop NM, so
+    # there's nothing to restart — just lift the per-device unmanaged scope
+    # that enable_monitor_mode set.  No-op without nmcli.
+    _nm_set_unmanaged(original_iface, unmanaged=False)
+
+    # Step 6: verify the radio is responsive before declaring teardown done.
+    # If the driver-reset didn't fully recover the chip, the operator sees
+    # a clear log line rather than a silent half-broken state.
+    ok, reason = _verify_radio_health(original_iface)
+    if not ok:
+        log(f"WARNING: post-teardown radio health check failed: {reason}")
+        log("Attempting second driver reset...")
+        _reset_usb_wifi_driver(original_iface)
+        ok, reason = _verify_radio_health(original_iface)
+        if not ok:
+            log(f"WARNING: radio still unhealthy after second reset: {reason}")
+            log("Spectre/operator should investigate before next session.")
+
     log(f"Monitor mode disabled — {original_iface} restored to managed mode")
 
 

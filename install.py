@@ -492,6 +492,98 @@ VERIFY_TOOLS = [
 ]
 
 
+# ---------------------------------------------------------------------------
+# Phase — NetworkManager exclusion + driver quirks (Pi-class stability)
+# ---------------------------------------------------------------------------
+
+NM_UNMANAGED_TEMPLATE = """\
+# Installed by Aether — keeps the attack radio out of NetworkManager's hands
+# so monitor-mode use doesn't disrupt other network services, and so NM's
+# periodic random-MAC scans don't wedge the USB WiFi driver after Aether
+# sessions.  Comment out or remove this file to let NM manage the radio
+# again.
+[keyfile]
+unmanaged-devices=interface-name:{iface}
+"""
+
+MT76_MODPROBE_CONF = """\
+# Aether: mt76 driver tuning for Raspberry Pi 4 USB 3.0 controller.
+# Disables scatter-gather DMA which improves stability of mt76x2u under
+# sustained monitor-mode use.  Costs ~5% throughput, eliminates a known
+# class of USB transfer hangs that lead to kernel deadlocks.
+options mt76_usb disable_usb_sg=1
+"""
+
+
+def _autodetect_attack_radio() -> str:
+    """Return the first USB-attached WiFi interface name, or ''.  Used to
+    decide which radio to mark unmanaged by default.  Operator can edit
+    the resulting conf to override."""
+    sys_net = Path("/sys/class/net")
+    if not sys_net.exists():
+        return ""
+    for iface_dir in sorted(sys_net.iterdir()):
+        if not iface_dir.name.startswith("wl"):
+            continue
+        try:
+            real_path = (iface_dir / "device").resolve()
+            if "usb" in str(real_path):
+                return iface_dir.name
+        except OSError:
+            continue
+    return ""
+
+
+def phase_nm_config(dry_run: bool) -> None:
+    phase_header("PHASE — NetworkManager attack-radio exclusion")
+    if not shutil.which("nmcli"):
+        info("NetworkManager not installed; skipping.")
+        return
+    attack_iface = _autodetect_attack_radio()
+    if not attack_iface:
+        info("No USB WiFi adapter detected; skipping NM exclusion.")
+        info("Re-run after attaching the attack radio, or edit "
+             "/etc/NetworkManager/conf.d/99-aether-radio.conf manually "
+             "to set unmanaged-devices=interface-name:<your-iface>")
+        return
+    conf_path = Path("/etc/NetworkManager/conf.d/99-aether-radio.conf")
+    content   = NM_UNMANAGED_TEMPLATE.format(iface=attack_iface)
+    info(f"Writing {conf_path} ({attack_iface} -> unmanaged)")
+    if not dry_run:
+        try:
+            conf_path.parent.mkdir(parents=True, exist_ok=True)
+            conf_path.write_text(content)
+            run(["systemctl", "reload", "NetworkManager"],
+                check=False, dry_run=dry_run)
+            success(f"NetworkManager will no longer touch {attack_iface}")
+        except OSError as exc:
+            error(f"Failed: {exc}")
+
+
+def phase_mt76_quirks(dry_run: bool) -> None:
+    phase_header("PHASE — mt76 driver quirks (Pi 4 only)")
+    cpuinfo = ""
+    cpu_path = Path("/proc/cpuinfo")
+    if cpu_path.exists():
+        try:
+            cpuinfo = cpu_path.read_text()
+        except OSError:
+            pass
+    if "Raspberry Pi" not in cpuinfo and "BCM2711" not in cpuinfo:
+        info("Not a Pi 4 — skipping mt76 modprobe quirks.")
+        return
+    target = Path("/etc/modprobe.d/aether-mt76.conf")
+    info(f"Writing {target} (disable_usb_sg=1 for Pi 4 USB stability)")
+    if not dry_run:
+        try:
+            target.write_text(MT76_MODPROBE_CONF)
+            success("mt76 driver will load with safer options on next boot.")
+            info("Active session may still use old options until reboot or "
+                 "modprobe -r mt76x2u && modprobe mt76x2u.")
+        except OSError as exc:
+            error(f"Failed: {exc}")
+
+
 def phase_wordlists(dry_run: bool) -> None:
     """Download SecLists probable-v2-wpa-top4800.txt for Spectre-managed WPA cracking.
 
@@ -674,6 +766,15 @@ def main() -> None:
             warn("Not running as root — skipping symlink creation.")
     elif dry_run:
         phase_symlinks(dry_run)
+
+    # Phase — NetworkManager exclusion + Pi 4 mt76 driver quirks.
+    # Both are best-effort; root recommended but installer continues either
+    # way (the per-session helpers in aether.py still work without them).
+    if is_root() or dry_run:
+        phase_nm_config(dry_run)
+        phase_mt76_quirks(dry_run)
+    else:
+        warn("Not running as root — skipping NM exclusion + mt76 quirks.")
 
     # Phase 6 — WPA wordlists (SecLists probable-v2-wpa-top4800.txt for Spectre-managed runs)
     phase_wordlists(dry_run)
