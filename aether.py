@@ -27,6 +27,7 @@ Usage:
 import argparse
 import json
 import errno
+import math
 import os
 import platform
 import re
@@ -40,6 +41,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from collections import Counter
 from datetime import datetime
 from html.parser import HTMLParser as _HTMLParser
 from itertools import permutations as _permutations
@@ -53,7 +55,7 @@ import struct
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-VERSION = "1.13.1"
+VERSION = "1.17.0"
 
 
 def _clients_base() -> Path:
@@ -166,7 +168,22 @@ def _load_catalogue() -> None:
                    else data)
         if not isinstance(entries, list):
             return
-        _catalogue = {e["id"]: e for e in entries if isinstance(e, dict) and "id" in e}
+        # Index by canonical `id` (AETHER-NNN, AETHER-INFO-AP, …) AND by
+        # legacy `_x_catalogue_id` aliases (pmf_not_enforced, btm_hijack,
+        # captive_bypass, …) so emit sites using either form resolve.
+        # Without the alias index, `finding_from_cat("pmf_not_enforced", …)`
+        # silently misses → entry={} → severity defaults to HIGH for every
+        # PMF/BTM/captive finding.
+        _catalogue = {}
+        for e in entries:
+            if not isinstance(e, dict):
+                continue
+            cid = e.get("id")
+            if cid:
+                _catalogue[cid] = e
+            alias = e.get("_x_catalogue_id")
+            if alias and alias != cid:
+                _catalogue[alias] = e
     except Exception as exc:
         print(f"[Aether] catalogue load failed: {exc}", flush=True)
 
@@ -227,51 +244,109 @@ def finding(title: str, severity: str, description: str,
 def finding_from_cat(cat_id: str, data: dict | None = None,
                      output_file: str = "", title_override: str = "") -> None:
     """Emit a finding using catalogue as authoritative source for all metadata,
-    including CVSS score and vector when present in the catalogue entry."""
+    including risk + CVSS when present.  Reads `risk` per universal schema
+    v1.1 (§13c) with fallbacks to legacy `_x_severity` / `severity`, ending
+    at HIGH only when the catalogue is silent.  Previous version read
+    `severity` only, which silently defaulted every finding to HIGH because
+    catalogue entries use `risk` as the field name."""
     entry = _catalogue.get(cat_id, {})
+    risk = (entry.get("risk")
+            or entry.get("_x_severity")
+            or entry.get("severity")
+            or "HIGH")
+    remediation = (entry.get("remediation")
+                   or entry.get("remediation_brief")
+                   or entry.get("_x_remediation", ""))
+    cvss = entry.get("cvss_score")
+    if cvss is None:
+        cvss = entry.get("cvss_v3_base")
+    if cvss is None:
+        cvss = entry.get("_x_cvss_score")
     finding(
         title=title_override or entry.get("title", cat_id),
-        severity=entry.get("severity", "HIGH"),
+        severity=risk,
         description=entry.get("description", cat_id),
         data={**(data or {}), "catalogue_id": cat_id,
-              "remediation": entry.get("remediation", "")},
+              "remediation": remediation},
         output_file=output_file,
-        cvss_score=entry.get("cvss_score"),
+        cvss_score=cvss,
         cvss_vector=entry.get("cvss_vector", ""),
     )
 
 
-# Title-based merge for the inventory informational findings.  Pattern is the
-# same as Scattershot3's add_finding() merge (writer-side): same canonical
-# title → collapse into a single entry, accumulating per-AP detail into
-# data["merged_records"] and into the affected list at universal-synthesis time.
-_AETHER_MERGE_TITLES = {
-    "Wireless Access Points Observed (Inventory)",
-    "Authentication Types Classified (Inventory)",
-    "Wireless Vendors Identified (Inventory)",
-    "Channel Allocations Observed (Inventory)",
+# Catalogue-ID-driven merge.  Each entry maps a catalogue_id to a function
+# that extracts the grouping key from the finding's data.  Findings that
+# share both catalogue_id AND grouping key are collapsed into a single
+# entry whose `data["merged_records"]` holds every contributor's data and
+# whose `affected` list (synthesised at universal-output time) is the union
+# of per-record identifiers (BSSIDs, client MACs, etc.).
+#
+# Adding a new merge: add the catalogue_id key + key-extractor lambda.
+# Catalogue IDs not present here pass through un-merged.
+_AETHER_MERGE_KEYS = {
+    # Inventory: collapse per-AP findings into one per SSID
+    "AETHER-INFO-AP":         lambda d: ("ssid",   d.get("ssid", "")),
+    "AETHER-INFO-AUTH-TYPE":  lambda d: ("ssid",   d.get("ssid", "")),
+    "AETHER-INFO-CHANNEL":    lambda d: ("ssid",   d.get("ssid", "")),
+    "AETHER-INFO-VENDOR":     lambda d: ("vendor", d.get("vendor", "")),
+    # Client observations: collapse per-client findings into one per BSSID
+    "AETHER-INFO-CLIENT":     lambda d: ("bssid",  d.get("associated_bssid", "")),
+    "AETHER-INFO-PROBE":      lambda d: ("bssid",  d.get("seen_on_bssid", "")),
+    # PMF / BTM: collapse per-attack-attempt findings into one per BSSID
+    "AETHER-022":             lambda d: ("bssid",  d.get("bssid", "")),  # pmf_not_enforced
+    "AETHER-023":             lambda d: ("bssid",  d.get("bssid", "")),  # btm_hijack
+    "pmf_not_enforced":       lambda d: ("bssid",  d.get("bssid", "")),
+    "btm_hijack":             lambda d: ("bssid",  d.get("bssid", "")),
 }
 
+# Canonical merged-finding titles.  When a group merges, the title is
+# replaced with this so consumers see one descriptive heading per group
+# instead of N variant titles (e.g. one per client MAC).  Empty here means
+# keep the first record's title as-is.
+_AETHER_MERGED_TITLES = {
+    "AETHER-INFO-AP":         lambda k: f"Wireless Access Points Observed on SSID: {k}",
+    "AETHER-INFO-AUTH-TYPE":  lambda k: f"Authentication Type Classified for SSID: {k}",
+    "AETHER-INFO-CHANNEL":    lambda k: f"Channel Allocations Observed for SSID: {k}",
+    "AETHER-INFO-VENDOR":     lambda k: f"Wireless Vendor Identified: {k}",
+    "AETHER-INFO-CLIENT":     lambda k: f"Client Devices Observed on BSSID: {k}",
+    "AETHER-INFO-PROBE":      lambda k: f"Client Probe Requests Observed on BSSID: {k}",
+    "AETHER-022":             lambda k: f"PMF Not Required: Management Frames Unprotected on BSSID {k}",
+    "AETHER-023":             lambda k: f"BSS Transition Management Hijack Successful on BSSID {k}",
+    "pmf_not_enforced":       lambda k: f"PMF Not Required: Management Frames Unprotected on BSSID {k}",
+    "btm_hijack":             lambda k: f"BSS Transition Management Hijack Successful on BSSID {k}",
+}
+
+
 def _merge_native_findings(records: list) -> list:
-    """Collapse inventory-style INFO findings emitted once per AP into a
-    single per-title finding.  Non-inventory findings pass through unchanged."""
-    merged: dict[str, dict] = {}
+    """Collapse findings whose catalogue_id is registered in _AETHER_MERGE_KEYS
+    into a single per-group entry.  Grouping key is (catalogue_id, key) where
+    key is extracted from each finding's data per the lambda registered above.
+    Findings outside the registered set pass through unchanged."""
+    merged: dict[tuple, dict] = {}
     out: list = []
     for rec in records:
         if not isinstance(rec, dict):
             out.append(rec); continue
-        title = rec.get("title") or ""
-        if title in _AETHER_MERGE_TITLES:
-            data = rec.get("data") or {}
-            if title in merged:
-                merged[title]["data"].setdefault("merged_records", []).append(data)
+        data = rec.get("data") or {}
+        cat_id = data.get("catalogue_id", "")
+        if cat_id and cat_id in _AETHER_MERGE_KEYS:
+            key_field, key_val = _AETHER_MERGE_KEYS[cat_id](data)
+            mk = (cat_id, key_field, key_val)
+            if mk in merged:
+                merged[mk]["data"].setdefault("merged_records", []).append(data)
             else:
                 new_rec = dict(rec)
+                # Replace per-record title with the group title so the
+                # consumer sees one heading per (catalogue_id, group key)
+                if cat_id in _AETHER_MERGED_TITLES and key_val:
+                    new_rec["title"] = _AETHER_MERGED_TITLES[cat_id](key_val)
                 new_rec["data"] = {
                     **{k: v for k, v in data.items() if k != "merged_records"},
                     "merged_records": [data],
+                    "merge_key_field": key_field,
+                    "merge_key_value": key_val,
                 }
-                merged[title] = new_rec
+                merged[mk] = new_rec
                 out.append(new_rec)
         else:
             out.append(rec)
@@ -311,24 +386,62 @@ def _u_synthesize_outputs(output_dir: Path, native_findings: list) -> None:
                 _ch_int = int(channel) if channel else 0
             except (ValueError, TypeError):
                 _ch_int = 0
-            # For inventory findings that were merged in _merge_native_findings,
-            # build the affected list from every per-AP record so the consumer
-            # sees one finding with N "ssid (bssid) ch<n>" rows.
+            # For merged findings (collapsed in _merge_native_findings),
+            # build affected[] as the union of grouping-relevant identifiers
+            # from every contributor:
+            #   merge_key_field=ssid  → affected lists each BSSID under that SSID
+            #   merge_key_field=bssid → affected lists each client MAC seen on
+            #                           that BSSID (Client/Probe/PMF/BTM groups)
             merged_records = data.get("merged_records") if isinstance(data, dict) else None
+            merge_key_field = data.get("merge_key_field", "") if isinstance(data, dict) else ""
             if merged_records:
-                aff_lines: list[str] = []
-                for mr in merged_records:
-                    if not isinstance(mr, dict): continue
-                    _ssid_m  = mr.get("ssid")  or mr.get("SSID")  or ""
-                    _bssid_m = mr.get("bssid") or mr.get("BSSID") or ""
-                    _ch_m    = mr.get("channel") or mr.get("ch") or ""
-                    _auth_m  = mr.get("auth_type") or ""
-                    _ven_m   = mr.get("vendor") or ""
-                    pieces = [p for p in (_ssid_m, f"({_bssid_m})" if _bssid_m else "",
-                                          f"ch{_ch_m}" if _ch_m else "",
-                                          _auth_m, _ven_m) if p]
-                    if pieces: aff_lines.append(" ".join(pieces))
-                affected = "\n".join(sorted(set(aff_lines)))
+                aff_items: list[str] = []
+                if merge_key_field == "ssid":
+                    # Group is per-SSID → list BSSIDs (+ channel + vendor when present)
+                    for mr in merged_records:
+                        if not isinstance(mr, dict): continue
+                        _bssid_m = mr.get("bssid") or mr.get("BSSID") or ""
+                        _ch_m    = mr.get("channel") or mr.get("ch") or ""
+                        _auth_m  = mr.get("auth_type") or ""
+                        _ven_m   = mr.get("vendor") or ""
+                        pieces = [p for p in (_bssid_m,
+                                              f"ch{_ch_m}" if _ch_m else "",
+                                              _auth_m, _ven_m) if p]
+                        if pieces: aff_items.append(" ".join(pieces))
+                elif merge_key_field == "bssid":
+                    # Group is per-BSSID → list client MACs (+ vendor when known).
+                    # Different catalogue_ids store the MAC in different keys —
+                    # check each known location.
+                    for mr in merged_records:
+                        if not isinstance(mr, dict): continue
+                        cmac = (mr.get("client") or mr.get("client_mac")
+                                or mr.get("mac") or "")
+                        cven = mr.get("vendor") or ""
+                        probe = mr.get("probed_ssid", "")
+                        if cmac and cven:
+                            aff_items.append(f"{cmac} ({cven})"
+                                             + (f" probed {probe!r}" if probe else ""))
+                        elif cmac:
+                            aff_items.append(cmac
+                                             + (f" probed {probe!r}" if probe else ""))
+                    # PMF findings have no per-client MAC — only one per BSSID.
+                    # Fall back to ssid identification so the row isn't empty.
+                    if not aff_items:
+                        _ssid_first = next(
+                            (mr.get("ssid", "") for mr in merged_records
+                             if isinstance(mr, dict) and mr.get("ssid")),
+                            "")
+                        if _ssid_first:
+                            aff_items.append(f"SSID: {_ssid_first}")
+                else:
+                    # Other group field — best-effort generic rendering
+                    for mr in merged_records:
+                        if not isinstance(mr, dict): continue
+                        _s = mr.get("ssid", "")
+                        _b = mr.get("bssid", "")
+                        if _s or _b:
+                            aff_items.append(f"{_s} ({_b})".strip())
+                affected = "\n".join(sorted(set(i for i in aff_items if i)))
                 output_blob = json.dumps(merged_records, indent=2)[:4096]
             else:
                 affected = f"{ssid} ({bssid})" if ssid or bssid else ""
@@ -440,6 +553,90 @@ _scope_bssids: set[str] = set()
 _scope_ssids:  set[str] = set()
 
 
+# ── Project-scoped wordlist storage ───────────────────────────────────────
+# Set by run() at startup.  When non-None, generated wordlists (SSID-seeded,
+# domain-derived, website-scraped, multi-source merges) land in
+# <project>/wordlists/ with descriptive names instead of /tmp/tmpXXXXXX.
+# When None (e.g. unit tests, direct CLI without --project), helpers fall
+# back to system tempdir so legacy behaviour is preserved.
+_PROJECT_WORDLIST_DIR: "Path | None" = None
+
+
+def _set_project_wordlist_dir(p) -> None:
+    """Register the project's wordlists/ directory.  Idempotent — safe to
+    call multiple times; only the most recent value is used."""
+    global _PROJECT_WORDLIST_DIR
+    if p is None:
+        _PROJECT_WORDLIST_DIR = None
+        return
+    pp = Path(p) if not isinstance(p, Path) else p
+    pp.mkdir(parents=True, exist_ok=True)
+    _PROJECT_WORDLIST_DIR = pp
+
+
+def _sanitize_wordlist_name(s: str) -> str:
+    """Turn an arbitrary descriptor (SSID, hostname, domain) into a
+    filesystem-safe filename stem.  Collapses runs of non-alphanumerics
+    to a single underscore, trims to 64 chars, removes leading/trailing
+    underscores.  Empty input -> 'unnamed'."""
+    if not s:
+        return "unnamed"
+    cleaned = re.sub(r"[^A-Za-z0-9._-]+", "_", str(s)).strip("_")
+    cleaned = cleaned[:64] if cleaned else "unnamed"
+    return cleaned or "unnamed"
+
+
+def _open_wordlist_file(descriptive_name: str, suffix: str = ".txt"):
+    """Open a wordlist for writing.
+
+    If a project wordlist dir is registered, the file lives at
+    <project>/wordlists/<sanitized_name><suffix> — collision-safe via a
+    numeric suffix (_1, _2, ...) when the bare name already exists.
+    Otherwise falls back to tempfile.NamedTemporaryFile in the system
+    tempdir (legacy /tmp behaviour) so callers that run without a
+    project (unit tests, ad-hoc CLI use) continue to work.
+
+    Returns (path: Path, file_handle).  Caller closes the handle.
+    """
+    wl_dir = _PROJECT_WORDLIST_DIR
+    if wl_dir is not None:
+        try:
+            wl_dir.mkdir(parents=True, exist_ok=True)
+            stem = _sanitize_wordlist_name(descriptive_name)
+            target = wl_dir / f"{stem}{suffix}"
+            n = 1
+            while target.exists():
+                target = wl_dir / f"{stem}_{n}{suffix}"
+                n += 1
+            fh = open(target, "w", encoding="utf-8")
+            return target, fh
+        except OSError as exc:
+            # Fall through to tempfile on permission / disk-full errors so
+            # the scan keeps running.  Logged so the operator sees it.
+            err(f"_open_wordlist_file: could not write to {wl_dir} ({exc}) — "
+                "falling back to system tempdir")
+    tmp = tempfile.NamedTemporaryFile(
+        mode="w", suffix=suffix, delete=False, encoding="utf-8")
+    return Path(tmp.name), tmp
+
+
+def _is_project_wordlist(path) -> bool:
+    """True when `path` lives under the active project wordlists/ dir.
+    Cleanup helpers use this to skip evidence files — generated wordlists
+    in the project dir are preserved, not deleted at end of run."""
+    if _PROJECT_WORDLIST_DIR is None or not path:
+        return False
+    try:
+        return Path(path).resolve().is_relative_to(_PROJECT_WORDLIST_DIR.resolve())
+    except (AttributeError, ValueError, OSError):
+        # is_relative_to is 3.9+; fall back if missing or path is malformed
+        try:
+            return str(Path(path).resolve()).startswith(
+                str(_PROJECT_WORDLIST_DIR.resolve()) + os.sep)
+        except Exception:
+            return False
+
+
 def _in_scope(ap: dict) -> bool:
     """Return True if the AP is within the configured assessment scope.
     An empty scope means all APs are in-scope (default behaviour).
@@ -454,6 +651,173 @@ def _in_scope(ap: dict) -> bool:
         log(f"  OUT OF SCOPE — skipping {ssid!r} [{bssid}]")
         return False
     return True
+
+
+# ── Cross-AP auth-mode consistency detector ──────────────────────────────────
+# Ordered weakest → strongest.  Index = security tier.  Equal indices mean
+# "no real downgrade" (e.g. WPA2-EAP and WPA3-EAP-Transition both ~tier 5).
+_AUTH_STRENGTH = (
+    ("OPEN",                 0),
+    ("WEP",                  1),
+    ("WPA-PSK",              2),
+    ("WPA-EAP",              2),
+    ("WPA2-PSK",             3),
+    ("WPA2/WPA3-TRANSITION", 4),   # legitimate mixed mode, not a downgrade
+    ("WPA2-ENTERPRISE",      4),
+    ("WPA2-EAP",             4),
+    ("WPA3-SAE",             5),
+    ("WPA3-ENTERPRISE",      5),
+    ("WPA3-EAP",             5),
+    ("IPSK-SUSPECTED",       3),   # ~WPA2-PSK strength
+)
+_AUTH_TIER = {a: t for a, t in _AUTH_STRENGTH}
+
+
+def _auth_strength_tier(auth_type: str) -> int:
+    """Map a classified auth type string to a numeric strength tier.
+    Unknown strings map to tier -1 (unclassifiable, ignored by the
+    inconsistency detector to avoid false-positive downgrades on noisy
+    classifier output)."""
+    if not auth_type:
+        return -1
+    key = auth_type.strip().upper().replace(" ", "")
+    return _AUTH_TIER.get(key, -1)
+
+
+def _detect_mixed_auth_per_ssid(aps: list) -> None:
+    """Emit an AETHER-INFO-MIXED-AUTH finding when the same SSID is broadcast
+    across multiple BSSIDs with materially different auth-mode strengths.
+    Only fires on true downgrades (Δtier ≥ 1 between strongest and weakest
+    AP for the same SSID) — not on benign WPA2/WPA3 transition deployments
+    where tiers are intentionally close."""
+    by_ssid: dict = {}
+    for ap in aps:
+        if not isinstance(ap, dict):
+            continue
+        ssid = (ap.get("ssid") or "").strip()
+        if not ssid:
+            continue
+        by_ssid.setdefault(ssid, []).append(ap)
+
+    for ssid, ap_list in by_ssid.items():
+        # Need ≥2 APs broadcasting this SSID to have any spread
+        if len(ap_list) < 2:
+            continue
+        tier_map: dict = {}
+        for ap in ap_list:
+            at = ap.get("auth_type") or ap.get("authentication") or ""
+            tier = _auth_strength_tier(at)
+            if tier < 0:
+                continue   # unclassifiable — exclude from downgrade calc
+            tier_map.setdefault(tier, []).append({
+                "bssid":     ap.get("bssid", ""),
+                "auth_type": at,
+                "channel":   ap.get("channel", ""),
+                "vendor":    ap.get("vendor", ""),
+            })
+        if len(tier_map) < 2:
+            continue   # all APs at same tier (or unclassifiable) → no downgrade
+        strongest = max(tier_map.keys())
+        weakest   = min(tier_map.keys())
+        if strongest - weakest < 1:
+            continue   # tiers are adjacent at most — could be benign transition
+        # True downgrade — strongest auth on some APs, weaker on others.
+        # Emit ONE finding per SSID; affected[] lists every BSSID using
+        # less-than-strongest auth so the operator knows which APs to
+        # remediate.
+        weak_aps = []
+        for tier, bs in tier_map.items():
+            if tier < strongest:
+                weak_aps.extend(bs)
+        finding_from_cat(
+            "AETHER-INFO-MIXED-AUTH",
+            data={
+                "ssid":                ssid,
+                "strongest_auth_tier": strongest,
+                "weakest_auth_tier":   weakest,
+                "tier_delta":          strongest - weakest,
+                "downgraded_bssids":   weak_aps,
+                "strongest_bssids": [
+                    {"bssid": ap["bssid"], "auth_type": ap["auth_type"]}
+                    for ap in tier_map[strongest]
+                ],
+            },
+            title_override=(
+                f"Inconsistent Auth Modes for SSID '{ssid}' — "
+                f"{len(weak_aps)} AP(s) using weaker auth"
+            ),
+        )
+
+
+# ── Wireless-interface binding helpers (captive portal tests) ────────────────
+# Captive portal bypass tests MUST traverse the wireless interface under test
+# — otherwise the OS routing table picks egress (often eth0 or a VPN tun0 on
+# Pi appliances), producing false-positive "bypass succeeded" findings that
+# reflect the operator's wired/VPN connection, not the wireless captive
+# portal.  These helpers force every subprocess (dig, curl, ping) and every
+# Python socket onto the specified interface.
+
+def _get_iface_ip(iface: str, family: int = 4) -> "str | None":
+    """Return the IPv4 (family=4) or IPv6 (family=6, non-link-local) address
+    currently bound to `iface`, or None if none/iface missing.  Used to gate
+    captive portal tests — no IP means the interface isn't associated and
+    cannot carry IP traffic, so all bypass tests must be skipped."""
+    if not iface:
+        return None
+    try:
+        flag = "-4" if family == 4 else "-6"
+        out, rc = _run(["ip", flag, "-o", "addr", "show", "dev", iface], timeout=5)
+        if rc != 0 or not out:
+            return None
+        if family == 4:
+            m = re.search(r"inet (\d+\.\d+\.\d+\.\d+)", out)
+            return m.group(1) if m else None
+        # IPv6 — exclude link-local (fe80::/10)
+        for m in re.finditer(r"inet6 ([0-9a-fA-F:]+)", out):
+            addr = m.group(1)
+            if not addr.lower().startswith(("fe80:", "::1")):
+                return addr
+        return None
+    except Exception:
+        return None
+
+
+def _curl_iface_args(iface: str) -> list:
+    """Return curl args that bind to `iface`, or [] if iface is empty.
+    Use as `cmd = ['curl', *_curl_iface_args(iface), '-sS', '-m', '5', url]`."""
+    return ["--interface", iface] if iface else []
+
+
+def _dig_iface_args(iface_ip: str) -> list:
+    """Return dig args that bind queries to source IP `iface_ip`, or [] if
+    empty.  Use as `cmd = ['dig', *_dig_iface_args(ip), '@resolver', name]`."""
+    return ["-b", iface_ip] if iface_ip else []
+
+
+def _ping_iface_args(iface: str) -> list:
+    """Return ping args that bind to `iface`, or [] if empty."""
+    return ["-I", iface] if iface else []
+
+
+def _bind_socket_to_iface(sock, iface: str) -> bool:
+    """Bind a socket to a specific interface via SO_BINDTODEVICE (Linux).
+    Returns True on success.  Requires root.  Falls back to IP-based bind
+    when SO_BINDTODEVICE is unavailable (macOS dev box, missing CAP_NET_RAW)."""
+    if not iface:
+        return False
+    try:
+        import socket as _s
+        sock.setsockopt(_s.SOL_SOCKET, 25, iface.encode() + b"\0")
+        return True
+    except (OSError, AttributeError):
+        ip = _get_iface_ip(iface)
+        if not ip:
+            return False
+        try:
+            sock.bind((ip, 0))
+            return True
+        except OSError:
+            return False
 
 
 # ── Privilege / pre-flight checks ─────────────────────────────────────────────
@@ -532,22 +896,20 @@ def _generate_ssid_wordlist(ssid: str, base_wordlist: str | None) -> str | None:
     deduped = [w for w in mutations if not (w in seen or seen.add(w))]  # type: ignore[func-returns-value]
 
     try:
-        tmp = tempfile.NamedTemporaryFile(
-            mode="w", suffix=".txt", delete=False, encoding="utf-8"
-        )
+        path, fh = _open_wordlist_file(f"ssid_{_sanitize_wordlist_name(ssid)}")
         # SSID-derived mutations first (highest probability)
         for w in deduped:
-            tmp.write(w + "\n")
+            fh.write(w + "\n")
         # Append base wordlist lines
         if base_wordlist and os.path.exists(base_wordlist):
             with open(base_wordlist, encoding="utf-8", errors="replace") as f:
                 for line in f:
                     line = line.rstrip("\n")
                     if 8 <= len(line) <= 63 and line not in seen:
-                        tmp.write(line + "\n")
-        tmp.close()
-        log(f"  SSID wordlist: {len(deduped)} mutations + base → {tmp.name}")
-        return tmp.name
+                        fh.write(line + "\n")
+        fh.close()
+        log(f"  SSID wordlist: {len(deduped)} mutations + base → {path}")
+        return str(path)
     except Exception as exc:
         err(f"SSID wordlist generation failed: {exc}")
         return base_wordlist
@@ -569,9 +931,7 @@ def _concat_wordlists(wordlists: list[str]) -> str | None:
     try:
         seen: set = set()
         count = 0
-        tmp = tempfile.NamedTemporaryFile(
-            mode="w", suffix="-merged.txt", delete=False, encoding="utf-8"
-        )
+        path, fh = _open_wordlist_file("merged_base", suffix=".txt")
         for wl_path in existing:
             try:
                 with open(wl_path, encoding="utf-8", errors="replace") as f:
@@ -579,13 +939,13 @@ def _concat_wordlists(wordlists: list[str]) -> str | None:
                         line = line.rstrip("\n").rstrip("\r")
                         if 8 <= len(line) <= 63 and line not in seen:
                             seen.add(line)
-                            tmp.write(line + "\n")
+                            fh.write(line + "\n")
                             count += 1
             except Exception as exc:
                 err(f"  [merge] Failed to read {wl_path}: {exc}")
-        tmp.close()
-        log(f"  Merged {len(existing)} wordlists → {count} unique entries → {tmp.name}")
-        return tmp.name
+        fh.close()
+        log(f"  Merged {len(existing)} wordlists → {count} unique entries → {path}")
+        return str(path)
     except Exception as exc:
         err(f"Wordlist merge failed: {exc}")
         return existing[0] if existing else None
@@ -699,22 +1059,21 @@ def _build_domain_wordlist(domains: list[str], base_wordlist: str | None) -> str
                     _add(joined + sfx)
 
     try:
-        tmp = tempfile.NamedTemporaryFile(
-            mode="w", suffix=".txt", delete=False, encoding="utf-8"
-        )
+        first_domain = domains[0] if domains else "unnamed"
+        path, fh = _open_wordlist_file(f"domain_{_sanitize_wordlist_name(first_domain)}")
         for w in candidates:
-            tmp.write(w + "\n")
+            fh.write(w + "\n")
         if base_wordlist and os.path.exists(base_wordlist):
             with open(base_wordlist, encoding="utf-8", errors="replace") as f:
                 for line in f:
                     line = line.rstrip("\n")
                     if 8 <= len(line) <= 63 and line not in seen:
                         seen.add(line)
-                        tmp.write(line + "\n")
-        tmp.close()
+                        fh.write(line + "\n")
+        fh.close()
         log(f"  Domain wordlist: {len(candidates)} entries from "
-            f"{len(domains)} domain(s) → {tmp.name}")
-        return tmp.name
+            f"{len(domains)} domain(s) → {path}")
+        return str(path)
     except Exception as exc:
         err(f"Domain wordlist generation failed: {exc}")
         return base_wordlist
@@ -899,14 +1258,17 @@ def _scrape_site(url: str, max_depth: int, max_pages: int = 80) -> tuple:
     log(f"  [scrape] Crawled {len(visited)} page(s)")
     joined = " ".join(all_texts)
 
-    words: set = set()
+    # Track frequency, not just presence — the combinator uses it to
+    # prioritise repeated terms (brand / product / leadership names) over
+    # one-off filler words.  Replaces the prior set-based extraction.
+    word_counts: "Counter[str]" = Counter()
     for raw in re.findall(r"[a-zA-Z][a-zA-Z0-9]{2,}", joined):
         w = raw.lower()
         if len(w) >= 3 and w not in _STOP_WORDS:
-            words.add(w)
+            word_counts[w] += 1
 
     dates = _detect_dates(joined)
-    return words, dates
+    return word_counts, dates
 
 
 def _build_website_wordlist(url: str, max_depth: int,
@@ -923,16 +1285,16 @@ def _build_website_wordlist(url: str, max_depth: int,
 
     log(f"Website wordlist: scraping {url} (max depth {max_depth})…")
     try:
-        words, dates = _scrape_site(url, max(1, min(7, max_depth)))
+        word_counts, dates = _scrape_site(url, max(1, min(7, max_depth)))
     except Exception as exc:
         err(f"Website scrape error: {exc}")
         return base_wordlist
 
-    if not words:
+    if not word_counts:
         log("  [scrape] No usable words extracted")
         return base_wordlist
 
-    log(f"  [scrape] {len(words)} unique words, {len(dates)} date(s)")
+    log(f"  [scrape] {len(word_counts)} unique words, {len(dates)} date(s)")
 
     seen: set = set()
     candidates: list = []
@@ -942,8 +1304,18 @@ def _build_website_wordlist(url: str, max_depth: int,
             seen.add(w)
             candidates.append(w)
 
-    # Single-word mutations
-    word_list = sorted(words)
+    # Rank words by frequency × √length so the combinator's caps select
+    # the most-mentioned and most-distinctive terms (brand/product names,
+    # leadership surnames, geography) instead of whatever happens to be
+    # alphabetically first.  √length damps the length effect so a 30-char
+    # chemistry term doesn't outrank an 8-char product name mentioned 50×.
+    # Tie-break by raw frequency then length so the order is deterministic.
+    def _score(w: str) -> tuple:
+        return (word_counts[w] * math.sqrt(len(w)),
+                word_counts[w], len(w), w)
+    word_list = sorted(word_counts.keys(), key=_score, reverse=True)
+
+    # Single-word mutations — every scraped word, all three case forms
     for w in word_list:
         for v in (w, w.capitalize(), w.upper()):
             _add(v)
@@ -957,58 +1329,54 @@ def _build_website_wordlist(url: str, max_depth: int,
         for sfx in ("!", "@", "1", "123"):
             _add(ds + sfx)
 
-    # Words + dates
-    for w in word_list[:40]:
+    # Words + dates — cap raised 40 → 100 (top-scored words only)
+    for w in word_list[:100]:
         for ds in list(date_strs)[:25]:
             _add(w + ds)
             _add(w.capitalize() + ds)
             _add(ds + w)
 
-    # Pairwise combinations
-    cap2 = word_list[:50]
+    # Pairwise permutations — cap raised 50 → 100, with itertools.permutations
+    # so all orderings are generated (a-b AND b-a) instead of relying on a
+    # reverse-add inside an alphabetic-comparison filter.  Old code also had
+    # an early break at i=29 that capped the outer loop further; removed.
+    cap2 = word_list[:100]
     seps = ("", "-", "_", ".")
-    for i, w1 in enumerate(cap2):
-        for w2 in cap2:
-            if w1 >= w2:
-                continue
-            for sep in seps:
-                _add(w1 + sep + w2)
-                _add(w1.capitalize() + sep + w2.capitalize())
-                _add(w2 + sep + w1)
-        if i >= 29:
-            break
+    for w1, w2 in _permutations(cap2, 2):
+        for sep in seps:
+            _add(w1 + sep + w2)
+            _add(w1.capitalize() + sep + w2.capitalize())
 
-    # 3-word permutations (tightly capped to avoid explosion)
-    cap3 = word_list[:20]
-    for i, w1 in enumerate(cap3):
-        for j, w2 in enumerate(cap3):
-            if j <= i:
-                continue
-            for w3 in cap3:
-                if w3 in (w1, w2):
-                    continue
-                _add(w1 + w2 + w3)
-                _add(w1.capitalize() + w2.capitalize() + w3.capitalize())
-                _add(w1 + "-" + w2 + "-" + w3)
+    # 3-word permutations — cap raised 20 → 30, true permutations (was
+    # combinations gated by `if j <= i: continue`).  At cap 30 this yields
+    # 30×29×28 = 24,360 ordered triples × 3 case/sep variants = ~73K entries.
+    cap3 = word_list[:30]
+    for w1, w2, w3 in _permutations(cap3, 3):
+        _add(w1 + w2 + w3)
+        _add(w1.capitalize() + w2.capitalize() + w3.capitalize())
+        _add(w1 + "-" + w2 + "-" + w3)
 
     log(f"  Website wordlist: {len(candidates)} candidate passwords")
 
     try:
-        tmp = tempfile.NamedTemporaryFile(
-            mode="w", suffix="-web.txt", delete=False, encoding="utf-8",
-        )
+        try:
+            _host = urllib.parse.urlparse(url).hostname or "site"
+        except Exception:
+            _host = "site"
+        path, fh = _open_wordlist_file(
+            f"website_{_sanitize_wordlist_name(_host)}", suffix=".txt")
         for w in candidates:
-            tmp.write(w + "\n")
+            fh.write(w + "\n")
         if base_wordlist and os.path.exists(base_wordlist):
             with open(base_wordlist, encoding="utf-8", errors="replace") as bf:
                 for line in bf:
                     line = line.rstrip("\n")
                     if 8 <= len(line) <= 63 and line not in seen:
                         seen.add(line)
-                        tmp.write(line + "\n")
-        tmp.close()
-        log(f"  Website wordlist saved → {tmp.name}")
-        return tmp.name
+                        fh.write(line + "\n")
+        fh.close()
+        log(f"  Website wordlist saved → {path}")
+        return str(path)
     except Exception as exc:
         err(f"Website wordlist write failed: {exc}")
         return base_wordlist
@@ -2433,8 +2801,11 @@ def phase_wifite(
             log(f"[1b] wifite2: targeting '{ssid}'"
                 + (f" [{bssid_for_ssid}]" if bssid_for_ssid else ""))
             _run_wifite(extra, wifite_dir / f"wifite_{safe}.txt", ssid, merged_wl)
-            # Clean up temp wordlist
-            if merged_wl and merged_wl != wordlist and os.path.exists(merged_wl):
+            # Clean up temp wordlist — but preserve project-dir files
+            # (they're evidence per the universal output structure).
+            if (merged_wl and merged_wl != wordlist
+                    and os.path.exists(merged_wl)
+                    and not _is_project_wordlist(merged_wl)):
                 try:
                     os.unlink(merged_wl)
                 except Exception:
@@ -3638,11 +4009,12 @@ def phase_client_attacks(monitor_iface: str, target_aps: list,
                     "client": client_mac, "sent": sent,
                 })
                 if sent:
+                    # Title omitted — _merge_native_findings collapses by
+                    # BSSID and lists each redirected client in affected[].
                     finding_from_cat(
                         "btm_hijack",
                         data={"ssid": ssid, "bssid": bssid, "client": client_mac},
                         output_file=str(ca_dir / "btm_results.json"),
-                        title_override=f"BSS Transition Management Request Sent to {client_mac} on {ssid}",
                     )
         if not btm_results:
             log("Phase 7b: No associated clients found for BTM targeting.")
@@ -4114,7 +4486,12 @@ def phase_post_connection(ap_iface: str, output_dir: Path,
 
 def phase_legacy_attacks(monitor_iface: str, target_aps: list,
                           enriched_aps: list, output_dir: Path,
-                          tools: dict, timeout: int) -> None:
+                          tools: dict, timeout: int,
+                          managed_iface: str = "") -> None:
+    """managed_iface is the in-managed-mode wireless interface
+    (e.g. wlan0) used to source captive portal bypass test traffic.  When
+    empty or unavailable, captive portal tests skip with a clear log
+    rather than emitting false positives via whatever route the OS picks."""
     status("p11_legacy", "Phase 11: Legacy / Niche Attacks", "running")
     aps    = target_aps or enriched_aps
     lg_dir = output_dir / "legacy_attacks"
@@ -4263,92 +4640,177 @@ def phase_legacy_attacks(monitor_iface: str, target_aps: list,
     status("p11_wifidirect", "Phase 11b: Wi-Fi Direct / P2P WPS Scanning", "complete")
 
     # ── 11c: Captive Portal Bypass ────────────────────────────────────────────
+    # All bypass tests are EXPLICITLY BOUND to the wireless interface under
+    # test (managed_iface).  Without binding, the OS routing table picks
+    # egress and tests run via eth0/tun0 on appliances — producing false-
+    # positive "bypass succeeded" findings that have nothing to do with
+    # the wireless captive portal.
+    #
+    # Each successful method emits its own finding with per-method severity
+    # (CVSS-based, not a one-size HIGH).  A parent summary finding
+    # (captive_bypass / AETHER-034) collates them so consumers see both
+    # per-method detail AND a single "captive portal hardening" rollup.
     status("p11_captive", "Phase 11c: Captive Portal Bypass Testing", "running")
     cp_dir = lg_dir / "captive_bypass"
     cp_dir.mkdir(exist_ok=True)
 
-    # Check for a usable network route before attempting outbound tests.
-    # During a monitor-mode assessment the interface has no IP, so all
-    # outbound attempts fail with ENETUNREACH — log that clearly instead
-    # of emitting a wall of FAIL lines.
-    _has_route = True
-    try:
-        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as _rs:
-            _rs.settimeout(2)
-            _rs.connect(("1.1.1.1", 53))
-    except OSError as _re:
-        if _re.errno in (errno.ENETUNREACH, errno.EHOSTUNREACH):
-            _has_route = False
-    except Exception:
-        pass
-
-    if not _has_route:
-        log("Phase 11c: No network route available (monitor mode — no IP assigned) "
-            "— captive portal bypass tests require active network connectivity")
+    if not managed_iface:
+        log("Phase 11c: SKIPPED — no managed-mode wireless interface available "
+            "(would have tested via OS-default route, producing false positives)")
         (cp_dir / "bypass_results.json").write_text(
-            json.dumps([], indent=2), encoding="utf-8"
-        )
+            json.dumps({"skipped": True,
+                        "reason": "no managed-mode iface"}, indent=2),
+            encoding="utf-8")
         status("p11_captive", "Phase 11c: Captive Portal Bypass Testing",
-               "skipped", "no route")
+               "skipped", "no managed iface")
         status("p11_legacy", "Phase 11: Legacy / Niche Attacks", "complete")
         return
 
-    bypass_results = []
-    # These tests require outbound connectivity on some interface
-    test_targets = [
-        ("dns_external",  "DNS to external resolver", "1.1.1.1"),
-        ("http_ip",       "HTTP to known IP",         "http://1.1.1.1"),
-        ("https_ip",      "HTTPS to known IP",        "https://1.1.1.1"),
-    ]
-    for test_id, test_name, target in test_targets:
-        result = {"test": test_name, "target": target, "success": False, "detail": ""}
-        try:
-            if test_id == "dns_external":
-                import socket as _sock
-                old_timeout = _sock.getdefaulttimeout()
-                _sock.setdefaulttimeout(5)
-                try:
-                    _sock.getaddrinfo("one.one.one.one", None)
-                    result["success"] = True
-                    result["detail"] = "DNS resolution succeeded"
-                except Exception as e:
-                    result["detail"] = str(e)
-                finally:
-                    _sock.setdefaulttimeout(old_timeout)
-            else:
-                req = urllib.request.Request(
-                    target,
-                    headers={"User-Agent": "Mozilla/5.0 (captive-bypass-test)"},
-                )
-                with urllib.request.urlopen(req, timeout=5) as resp:
-                    result["success"] = resp.status < 400
-                    result["detail"]  = f"HTTP {resp.status}"
-        except Exception as e:
-            result["detail"] = str(e)
-        bypass_results.append(result)
-        log(f"Phase 11c [{test_name}]: {'PASS' if result['success'] else 'FAIL'} — {result['detail']}")
+    iface_ip   = _get_iface_ip(managed_iface, family=4)
+    iface_ip6  = _get_iface_ip(managed_iface, family=6)
 
-    # DNS tunneling probe (check if we can resolve long subdomains — tunneling indicator)
-    try:
-        import socket as _sock
-        _sock.setdefaulttimeout(3)
-        _sock.getaddrinfo("aabbccddaabbccddaabb.probe.example.com", None)
-        bypass_results.append({"test": "dns_tunnel_probe", "success": True,
-                                "detail": "Long DNS subdomain resolved — tunneling may be possible"})
-    except Exception:
-        bypass_results.append({"test": "dns_tunnel_probe", "success": False,
-                                "detail": "DNS tunneling probe blocked"})
+    if not iface_ip and not iface_ip6:
+        log(f"Phase 11c: SKIPPED — interface {managed_iface!r} has no IP "
+            "(not associated to any AP).  Captive portal bypass tests "
+            "require the test host to be associated to the open SSID "
+            "under test.")
+        (cp_dir / "bypass_results.json").write_text(
+            json.dumps({"skipped": True,
+                        "reason": f"iface {managed_iface} has no IPv4/IPv6"},
+                       indent=2),
+            encoding="utf-8")
+        status("p11_captive", "Phase 11c: Captive Portal Bypass Testing",
+               "skipped", f"{managed_iface} has no IP")
+        status("p11_legacy", "Phase 11: Legacy / Niche Attacks", "complete")
+        return
+
+    log(f"Phase 11c: binding all tests to {managed_iface} "
+        f"(IPv4={iface_ip or '—'}, IPv6={iface_ip6 or '—'})")
+
+    bypass_results = []
+
+    def _record(test_id: str, name: str, success: bool, detail: str,
+                cat_id: str = "", target: str = "") -> None:
+        rec = {"test": test_id, "name": name, "target": target,
+               "success": success, "detail": detail, "iface": managed_iface,
+               "src_ip": iface_ip or "", "src_ip6": iface_ip6 or ""}
+        bypass_results.append(rec)
+        log(f"Phase 11c [{name}]: {'PASS' if success else 'FAIL'} — {detail}")
+        # Per-method finding emission for each successful bypass.  Each
+        # catalogue entry carries its own risk + CVSS appropriate to the
+        # method (see Phase 4 catalogue additions in 1.17.0).
+        if success and cat_id:
+            finding_from_cat(
+                cat_id,
+                data={**rec, "method": test_id},
+                output_file=str(cp_dir / "bypass_results.json"),
+            )
+
+    # ─── Method 1: External DNS resolution pre-auth ─────────────────────
+    # Foundation for DNS tunneling.  If unauthenticated clients can resolve
+    # arbitrary names via external resolvers, an attacker can run iodine /
+    # dnscat2 for full-duplex tunnel.  HIGH per AETHER-CAP-DNS-EXTERNAL.
+    if iface_ip and shutil.which("dig"):
+        out, rc = _run(["dig", *_dig_iface_args(iface_ip),
+                        "+time=3", "+tries=1", "@1.1.1.1", "one.one.one.one"],
+                       timeout=10)
+        success = (rc == 0 and "NOERROR" in out and "ANSWER SECTION" in out)
+        _record("dns_external", "External DNS pre-auth", success,
+                ("DNS to 1.1.1.1 resolved one.one.one.one — captive portal "
+                 "is not blocking outbound DNS")
+                if success else "DNS blocked or non-NOERROR response",
+                cat_id="AETHER-CAP-DNS-EXTERNAL" if success else "",
+                target="1.1.1.1")
+
+    # ─── Method 2: DNS tunneling viability ──────────────────────────────
+    # Long random subdomains (tunneling pattern) resolved → tunneling viable.
+    # CRITICAL per AETHER-CAP-DNS-TUNNEL.
+    if iface_ip and shutil.which("dig"):
+        import random as _r, string as _s
+        rand_sub = "".join(_r.choices(_s.ascii_lowercase + _s.digits, k=40))
+        probe = f"{rand_sub}.invalid-tunnel-probe.example.com"
+        out, rc = _run(["dig", *_dig_iface_args(iface_ip),
+                        "+time=3", "+tries=1", "@1.1.1.1", probe],
+                       timeout=10)
+        # Look for ANY answer (even NXDOMAIN counts as "resolver reached")
+        # vs SERVFAIL or timeout (resolver unreachable / blocked).
+        reached_resolver = (rc == 0 and
+                            ("NOERROR" in out or "NXDOMAIN" in out))
+        _record("dns_tunnel", "DNS tunneling viability", reached_resolver,
+                ("Long random-subdomain query reached external resolver "
+                 "— DNS tunneling tools (iodine, dnscat2) can establish "
+                 "a full-duplex tunnel through this captive portal")
+                if reached_resolver else "Long DNS query blocked",
+                cat_id="AETHER-CAP-DNS-TUNNEL" if reached_resolver else "",
+                target=probe)
+
+    # ─── Method 3: Direct HTTP to arbitrary IP ──────────────────────────
+    if iface_ip and shutil.which("curl"):
+        out, rc = _run(["curl", *_curl_iface_args(managed_iface),
+                        "-sS", "-o", "/dev/null", "-w", "%{http_code}",
+                        "-m", "5", "--connect-timeout", "3",
+                        "http://1.1.1.1/"], timeout=10)
+        code = (out or "").strip()
+        success = code.isdigit() and int(code) < 400
+        _record("http_direct", "Direct HTTP to arbitrary IP", success,
+                f"HTTP {code} — direct internet HTTP without portal redirect"
+                if success else f"HTTP blocked (got {code or 'timeout'})",
+                cat_id="AETHER-CAP-HTTP-DIRECT" if success else "",
+                target="http://1.1.1.1/")
+
+    # ─── Method 4: Direct HTTPS to arbitrary IP ─────────────────────────
+    if iface_ip and shutil.which("curl"):
+        out, rc = _run(["curl", *_curl_iface_args(managed_iface),
+                        "-sSk", "-o", "/dev/null", "-w", "%{http_code}",
+                        "-m", "5", "--connect-timeout", "3",
+                        "https://1.1.1.1/"], timeout=10)
+        code = (out or "").strip()
+        success = code.isdigit() and int(code) < 400
+        _record("https_direct", "Direct HTTPS to arbitrary IP", success,
+                f"HTTPS {code} — direct internet HTTPS without portal interception"
+                if success else f"HTTPS blocked (got {code or 'timeout'})",
+                cat_id="AETHER-CAP-HTTPS-DIRECT" if success else "",
+                target="https://1.1.1.1/")
+
+    # ─── Method 5: IPv6 dual-stack bypass ───────────────────────────────
+    # Many captive portals only filter IPv4 — IPv6 traffic egresses fully.
+    # HIGH per AETHER-CAP-IPV6.
+    if iface_ip6 and shutil.which("curl"):
+        out, rc = _run(["curl", *_curl_iface_args(managed_iface),
+                        "-6", "-sSk", "-o", "/dev/null", "-w", "%{http_code}",
+                        "-m", "5", "--connect-timeout", "3",
+                        "https://[2606:4700:4700::1111]/"], timeout=10)
+        code = (out or "").strip()
+        success = code.isdigit() and int(code) < 400
+        _record("ipv6_bypass", "IPv6 dual-stack bypass", success,
+                f"IPv6 HTTPS {code} — captive portal does not filter v6 traffic "
+                "(common misconfiguration: portal only blocks v4)"
+                if success else f"IPv6 traffic blocked (got {code or 'timeout'})",
+                cat_id="AETHER-CAP-IPV6" if success else "",
+                target="https://[2606:4700:4700::1111]/")
+    elif iface_ip and not iface_ip6:
+        _record("ipv6_bypass", "IPv6 dual-stack bypass", False,
+                "Interface has no IPv6 — bypass not testable",
+                cat_id="", target="")
 
     (cp_dir / "bypass_results.json").write_text(
-        json.dumps(bypass_results, indent=2), encoding="utf-8"
-    )
+        json.dumps(bypass_results, indent=2), encoding="utf-8")
     bypasses = [r for r in bypass_results if r["success"]]
     if bypasses:
+        # Parent summary finding — collates the per-method findings into
+        # a single "Captive Portal Hardening" entry sized to the worst-
+        # severity individual method.  Risk taken from catalogue (MEDIUM
+        # for the generic AETHER-034 / captive_bypass entry) — individual
+        # method findings carry their own (per-method) severity.
         finding_from_cat(
             "captive_bypass",
-            data={"bypasses": bypasses},
+            data={"bypasses": bypasses,
+                  "iface":         managed_iface,
+                  "iface_ip":      iface_ip or "",
+                  "iface_ip6":     iface_ip6 or ""},
             output_file=str(cp_dir / "bypass_results.json"),
-            title_override=f"Captive Portal Bypass Possible: {len(bypasses)} Method(s)",
+            title_override=(f"Captive Portal Hardening: "
+                            f"{len(bypasses)} bypass method(s) succeeded"),
         )
     status("p11_captive", "Phase 11c: Captive Portal Bypass Testing", "complete")
 
@@ -4361,6 +4823,11 @@ def run(config: dict, project: str) -> None:
 
     output_dir = Path(project) / config.get("output_dir", "aether_output")
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Generated wordlists (SSID-seeded, domain-derived, website-scraped,
+    # multi-source merges) land in <project>/wordlists/ instead of /tmp/
+    # so they're preserved alongside the rest of the run evidence.
+    _set_project_wordlist_dir(Path(project) / "wordlists")
 
     interface     = config.get("interface", "wlan0")
     monitor_iface = config.get("monitor_interface", "wlan0mon")
@@ -4551,6 +5018,7 @@ def run(config: dict, project: str) -> None:
             phase_legacy_attacks(
                 active_monitor, target_aps, enriched_aps, output_dir,
                 tools, timeout,
+                managed_iface=interface,
             )
 
         # Phase 0-IV-VII: Cert/iPSK/captive-portal/identity analysis —
@@ -4578,8 +5046,10 @@ def run(config: dict, project: str) -> None:
 
     finally:
         disable_monitor_mode(active_monitor, interface)
-        # Clean up domain-derived temp wordlist
-        if _effective_wl and _effective_wl != wordlist:
+        # Clean up domain-derived temp wordlist — preserve project-dir
+        # files (evidence per the universal output structure).
+        if (_effective_wl and _effective_wl != wordlist
+                and not _is_project_wordlist(_effective_wl)):
             try:
                 os.unlink(_effective_wl)
             except Exception:
@@ -4856,16 +5326,25 @@ def phase_contextual_intel(enriched_aps: list, output_dir: Path) -> None:
                 "associated_bssid": bssid, "associated_ssid": ssid,
                 "probes": probes,
             })
+            # Title omitted — _merge_native_findings synthesises a per-BSSID
+            # group title and lists each MAC in affected[].
             finding_from_cat("AETHER-INFO-CLIENT",
                              data={"mac": cmac, "vendor": cvendor,
-                                   "associated_bssid": bssid, "associated_ssid": ssid},
-                             title_override=f"Client observed: {cmac} ({cvendor}) on {ssid!r}")
+                                   "associated_bssid": bssid, "associated_ssid": ssid})
             for p in probes:
                 inventory["probes"].add(p)
                 finding_from_cat("AETHER-INFO-PROBE",
                                  data={"client_mac": cmac, "probed_ssid": p,
-                                       "seen_on_bssid": bssid},
-                                 title_override=f"Client probe: {cmac} probed {p!r}")
+                                       "seen_on_bssid": bssid})
+
+    # ── Cross-AP auth-mode consistency check (per SSID) ──────────────────
+    # Same SSID broadcast across multiple BSSIDs with different auth modes
+    # is a security downgrade — operator attacks the weakest AP for that
+    # SSID and the strong mode on the other APs offers no protection.
+    # Common cause: misconfigured AP, transition-mode mistake, or rogue.
+    # Fires only when the spread represents a true downgrade (strongest vs
+    # something materially weaker) — not for benign WPA2/WPA3 mixed mode.
+    _detect_mixed_auth_per_ssid(inventory["aps"])
 
     # Save consolidated inventory snapshot
     snapshot = {
@@ -5348,9 +5827,25 @@ def phase_captive_portal_test(target_aps: list, output_dir: Path,
             "dns_bypass": None, "icmp_bypass": None, "splash_url": "",
         }
 
+        # All Phase 0-VI splash tests are bound to primary_iface so traffic
+        # traverses the wireless interface under test, not the OS's default
+        # route (often eth0/tun0 on Pi appliances).  When the iface has no
+        # IP, the host isn't associated to this SSID and tests skip.
+        _src_ip = _get_iface_ip(primary_iface)
+        if not _src_ip:
+            log(f"  [splash] {ssid!r}: skipping active tests — {primary_iface} "
+                "has no IP (not associated)")
+            (splash_dir / f"{ssid.replace(' ','_')}_splash.json").write_text(
+                json.dumps({**bypass_results,
+                            "skipped": True,
+                            "reason": f"iface {primary_iface} has no IP"}, indent=2),
+                encoding="utf-8")
+            continue
+
         # 1. Attempt DNS resolution before splash auth — tests if DNS escapes
         try:
-            out, rc = _run(["dig", "+time=3", "+tries=1",
+            out, rc = _run(["dig", *_dig_iface_args(_src_ip),
+                            "+time=3", "+tries=1",
                             "@8.8.8.8", "example.com"], timeout=8)
             if rc == 0 and "ANSWER SECTION" in out:
                 bypass_results["dns_bypass"] = True
@@ -5366,7 +5861,8 @@ def phase_captive_portal_test(target_aps: list, output_dir: Path,
 
         # 2. ICMP bypass test
         try:
-            out, rc = _run(["ping", "-c", "2", "-W", "2", "8.8.8.8"], timeout=10)
+            out, rc = _run(["ping", *_ping_iface_args(primary_iface),
+                            "-c", "2", "-W", "2", "8.8.8.8"], timeout=10)
             if rc == 0 and "0% packet loss" in out:
                 bypass_results["icmp_bypass"] = True
                 finding_from_cat("AETHER-SPLASH-003",
@@ -5380,7 +5876,8 @@ def phase_captive_portal_test(target_aps: list, output_dir: Path,
 
         # 3. Splash page fingerprint via HTTP redirect
         try:
-            out, rc = _run(["curl", "-sS", "-I", "-L", "-m", "5",
+            out, rc = _run(["curl", *_curl_iface_args(primary_iface),
+                            "-sS", "-I", "-L", "-m", "5",
                              "http://example.com"], timeout=10)
             if rc == 0:
                 splash_indicators = []
@@ -5408,9 +5905,73 @@ def phase_captive_portal_test(target_aps: list, output_dir: Path,
 
 # ── Phase: EAP-TLS Identity Disclosure Analysis ────────────────────────────
 
+# Regex patterns matching FreeRADIUS / hostapd-wpe / eaphammer diagnostic
+# strings that have been observed bleeding into EAP-Identity tshark output.
+# Root cause: when the rogue-AP daemon logs an event into a frame field that
+# subsequently gets dumped as an Identity (synthetic or real), tshark
+# extracts the literal bytes.  These don't match RFC 4282 NAI shape, but
+# we keep an explicit denylist too so the operator can see *why* something
+# was filtered when reviewing logs.
+_EAP_IDENTITY_DIAGNOSTIC_DENYLIST = (
+    re.compile(r"Running as user", re.IGNORECASE),
+    re.compile(r"Ready to process requests", re.IGNORECASE),
+    re.compile(r"Listening on (auth|acct|proxy|status|command)", re.IGNORECASE),
+    re.compile(r"Loaded virtual server", re.IGNORECASE),
+    re.compile(r"Loaded module\b", re.IGNORECASE),
+    re.compile(r"Compiled with", re.IGNORECASE),
+    re.compile(r"Server was built with", re.IGNORECASE),
+    re.compile(r"hostapd\b.*v\d", re.IGNORECASE),
+    re.compile(r"\bRADIUSD\b", re.IGNORECASE),
+    re.compile(r"\bWARNING\b|\bERROR\b|\bDEBUG\b|\bINFO\b", re.IGNORECASE),
+    re.compile(r"rlm_\w+:", re.IGNORECASE),
+    re.compile(r"could be dangerous", re.IGNORECASE),
+)
+
+
+def _is_valid_eap_identity(ident: str) -> tuple:
+    """Validate an EAP-Response/Identity value against RFC 4282 NAI shape.
+
+    Returns (is_valid: bool, reject_reason: str).  Valid identities are
+    1-253 chars, contain only printable ASCII (0x21-0x7E — explicitly no
+    whitespace, no quotes), and do not match any known FreeRADIUS /
+    hostapd-wpe diagnostic-string pattern.
+
+    Empty string is treated as valid (legitimate anonymous identity).
+    """
+    if ident == "":
+        return True, ""   # valid anonymous
+    if not ident:
+        return False, "empty/null"
+    if len(ident) > 253:
+        return False, f"length {len(ident)} > 253 (RFC 4282)"
+    # Reject if any char is outside printable ASCII (excludes 0x20 space,
+    # excludes 0x7F DEL, excludes all control chars).  Real identities
+    # never contain whitespace per RFC 4282.
+    for c in ident:
+        cp = ord(c)
+        if cp < 0x21 or cp > 0x7E:
+            return False, f"non-NAI character (codepoint 0x{cp:02X}) at offset {ident.index(c)}"
+    # Quotes inside identities are technically allowed by RFC 4282 §2.5
+    # but vanishingly rare in practice and the artifact we're filtering
+    # against contains double quotes verbatim.  Reject defensively.
+    if '"' in ident or "'" in ident:
+        return False, "contains quote character (RFC 4282 §2.5 — improbable in practice)"
+    for rx in _EAP_IDENTITY_DIAGNOSTIC_DENYLIST:
+        if rx.search(ident):
+            return False, f"matches diagnostic-string denylist pattern: {rx.pattern!r}"
+    return True, ""
+
+
 def phase_eaptls_identity_analysis(output_dir: Path, timeout: int = 30) -> None:
     """Parse captured EAPOL frames for EAP-Response/Identity messages and
-    flag any that leak username@realm (rather than anonymous@realm)."""
+    flag any that leak username@realm (rather than anonymous@realm).
+
+    Filters identities through _is_valid_eap_identity() to reject content
+    that tshark extracted from malformed/synthetic frames (notably
+    FreeRADIUS / hostapd-wpe diagnostic strings that have been observed
+    bleeding into the eap.identity field).  Rejected identities are
+    logged to eap_identities_rejected.json so the operator can audit
+    false-positive filtering if a legitimate identity is suppressed."""
     status("p_eaptls_id", "Phase 0-VII: EAP-TLS Identity Disclosure Analysis",
            "running")
     id_dir = output_dir / "eap_identity"
@@ -5424,7 +5985,7 @@ def phase_eaptls_identity_analysis(output_dir: Path, timeout: int = 30) -> None:
                "complete", "no captures or tshark missing")
         return
 
-    identities: list = []
+    raw_identities: list = []
     for pcap in pcap_paths:
         try:
             out, rc = _run([
@@ -5435,10 +5996,21 @@ def phase_eaptls_identity_analysis(output_dir: Path, timeout: int = 30) -> None:
             if rc == 0 and out.strip():
                 for line in out.strip().splitlines():
                     ident = line.strip()
-                    if ident and ident not in identities:
-                        identities.append(ident)
+                    if ident and ident not in raw_identities:
+                        raw_identities.append(ident)
         except Exception:
             pass
+
+    identities: list = []
+    rejected: list = []
+    for ident in raw_identities:
+        valid, reason = _is_valid_eap_identity(ident)
+        if valid:
+            identities.append(ident)
+        else:
+            rejected.append({"identity": ident, "reason": reason})
+            log(f"  [eap-id] rejected: {reason} — {ident[:60]!r}"
+                + ("…" if len(ident) > 60 else ""))
 
     for ident in identities:
         is_anon = (ident.lower().startswith("anonymous@") or
@@ -5455,8 +6027,17 @@ def phase_eaptls_identity_analysis(output_dir: Path, timeout: int = 30) -> None:
 
     (id_dir / "eap_identities.json").write_text(
         json.dumps({"identities": identities}, indent=2), encoding="utf-8")
+    if rejected:
+        (id_dir / "eap_identities_rejected.json").write_text(
+            json.dumps({"rejected": rejected,
+                        "note": "Filtered by _is_valid_eap_identity(); see "
+                                "_EAP_IDENTITY_DIAGNOSTIC_DENYLIST and RFC 4282 "
+                                "NAI shape rules in aether.py."}, indent=2),
+            encoding="utf-8")
     status("p_eaptls_id", "Phase 0-VII: EAP-TLS Identity Disclosure Analysis",
-           "complete", f"{len(identities)} identities observed")
+           "complete",
+           f"{len(identities)} identities observed"
+           + (f", {len(rejected)} rejected as artifacts" if rejected else ""))
 
 
 def main():

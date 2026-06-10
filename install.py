@@ -463,7 +463,14 @@ def phase_symlinks(dry_run: bool) -> None:
         if not dry_run:
             try:
                 link_path.symlink_to(target)
-                if target_path.exists():
+                # Only chmod the target if it isn't already executable.
+                # Previously this unconditionally chmod'd 0o755, which
+                # broke `git pull` on every appliance — git committed
+                # aether.py at 644 and the chmod flipped the mode bit,
+                # which git sees as a local modification.  Skipping when
+                # already-executable keeps the symlink usable without
+                # touching files that are committed at the correct mode.
+                if target_path.exists() and not os.access(str(target_path), os.X_OK):
                     target_path.chmod(0o755)
                 success(f"Symlink created: {link}")
             except OSError as exc:
