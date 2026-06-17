@@ -42,7 +42,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from collections import Counter
-from datetime import datetime
+from datetime import datetime, timezone
 from html.parser import HTMLParser as _HTMLParser
 from itertools import permutations as _permutations
 from pathlib import Path
@@ -55,7 +55,7 @@ import struct
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-VERSION = "1.20.0"
+VERSION = "1.22.0"
 
 
 def _clients_base() -> Path:
@@ -195,6 +195,17 @@ _findings_collected: list[dict] = []
 _MANAGED = os.environ.get("SPECTRE_MANAGED", "") == "1"
 _log_fh = None  # opened in main() once the project dir is known
 
+# §13b/§14j/§14k: canonical run-dir audit log (scan.log + scan.log.json + errors.log),
+# alongside the legacy aether_console.log. Set in main() once the project dir exists.
+try:
+    import sys as _s_el
+    if "/opt/pr0t31n/shared" not in _s_el.path:
+        _s_el.path.insert(0, "/opt/pr0t31n/shared")
+    import pr0t31n_event_log as _el
+except Exception:
+    _el = None
+_RUNLOG = None
+
 
 def _tok(token: str, msg: str) -> None:
     print(f"{token} {msg}", flush=True)
@@ -213,6 +224,19 @@ def _tok(token: str, msg: str) -> None:
             except Exception:
                 pass
         _log_fh.flush()
+    # §13b/§14j: mirror to the canonical run-dir audit log with a timestamp.
+    if _RUNLOG is not None:
+        try:
+            if token == "__SPECTRE_LOG__":
+                _RUNLOG.info(msg)
+            elif token == "__SPECTRE_ERR__":
+                _RUNLOG.error(msg)
+            elif token == "__SPECTRE_STATUS__":
+                d = json.loads(msg)
+                step = f" — {d['step']}" if d.get("step") else ""
+                _RUNLOG.event(f"phase {d.get('phase','?')}: {d.get('status','?')}{step}")
+        except Exception:
+            pass
 
 
 def log(msg: str)    -> None: _tok("__SPECTRE_LOG__",     msg)
@@ -226,12 +250,50 @@ def status(phase: str, label: str, state: str, step: str = "") -> None:
     }))
 
 
+_AETHER_RUN_DIR: "Path | None" = None   # §14/§13c: run dir, set once known
+
+
+def _set_aether_run_dir(p) -> None:
+    global _AETHER_RUN_DIR
+    _AETHER_RUN_DIR = Path(p) if p else None
+
+
+def _aether_rel(p):
+    """§13c: return path relative to the run dir, or the original on failure."""
+    if not p or _AETHER_RUN_DIR is None:
+        return p
+    try:
+        return str(Path(p).resolve().relative_to(_AETHER_RUN_DIR.resolve()))
+    except Exception:
+        return p
+
+
+def _emit_run_log(cmd, started, ended, rc, stdout, stderr) -> None:
+    """§14: emit a .log sibling (in <run_dir>/tool_logs/) for an external-tool
+    invocation made via _run / _popen."""
+    if _AETHER_RUN_DIR is None:
+        return
+    try:
+        import sys as _s
+        if "/opt/pr0t31n/shared" not in _s.path:
+            _s.path.insert(0, "/opt/pr0t31n/shared")
+        import pr0t31n_tool_runner as _ur
+        _ur.write_tool_log(
+            cmd=cmd, started=started, ended=ended, exit_code=rc,
+            stdout=stdout or "", stderr=stderr or "",
+            tool_name=(cmd[0] if isinstance(cmd, (list, tuple)) and cmd else "tool"),
+            log_dir=str(_AETHER_RUN_DIR / "tool_logs"),
+        )
+    except Exception:
+        pass
+
+
 def finding(title: str, severity: str, description: str,
             data: dict | None = None, output_file: str = "",
             cvss_score: float | None = None, cvss_vector: str = "") -> None:
     rec = {
         "title": title, "severity": severity, "description": description,
-        "data": data or {}, "output_file": output_file,
+        "data": data or {}, "output_file": _aether_rel(output_file),
         "ts": datetime.now().isoformat(),
     }
     if cvss_score is not None:
@@ -546,17 +608,31 @@ def _strip_ansi(text: str) -> str:
 
 def _popen(cmd: list, **kwargs) -> subprocess.Popen:
     kwargs.setdefault("stdin", subprocess.DEVNULL)
-    return subprocess.Popen(cmd, **kwargs)
+    proc = subprocess.Popen(cmd, **kwargs)
+    # §14: record the spawn (long-lived daemons — hostapd/dnsmasq/airodump/
+    # aireplay/Responder — stream to their own logs; this records the invocation).
+    try:
+        _now = datetime.now(timezone.utc)
+        _emit_run_log(cmd, _now, _now, None, "",
+                      f"(spawned background process pid={proc.pid})")
+    except Exception:
+        pass
+    return proc
 
 
 def _run(cmd: list, timeout: int = 60) -> tuple[str, int]:
+    _st = datetime.now(timezone.utc)
     try:
         r = subprocess.run(cmd, capture_output=True, text=True,
                            timeout=timeout, stdin=subprocess.DEVNULL)
+        _emit_run_log(cmd, _st, datetime.now(timezone.utc), r.returncode,
+                      r.stdout, r.stderr)
         return r.stdout + r.stderr, r.returncode
     except subprocess.TimeoutExpired:
+        _emit_run_log(cmd, _st, datetime.now(timezone.utc), -1, "", "(timeout)")
         return "(timeout)", -1
     except Exception as exc:
+        _emit_run_log(cmd, _st, datetime.now(timezone.utc), -1, "", str(exc))
         return str(exc), -1
 
 
@@ -5190,6 +5266,7 @@ def run(config: dict, project: str) -> None:
     # multi-source merges) land in <project>/wordlists/ instead of /tmp/
     # so they're preserved alongside the rest of the run evidence.
     _set_project_wordlist_dir(Path(project) / "wordlists")
+    _set_aether_run_dir(project)   # §14/§13c: per-invocation tool .logs + relative evidence
 
     interface     = config.get("interface", "wlan0")
     monitor_iface = config.get("monitor_interface", "wlan0mon")
@@ -6495,13 +6572,21 @@ def main():
                 str(config.get("targets") or "")),
     )
 
-    global _log_fh
+    global _log_fh, _RUNLOG
     try:
         _log_fh = open(Path(args.project) / "aether_console.log", "a", encoding="utf-8")
         _log_fh.write(f"# Aether v{VERSION} — {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
         _log_fh.flush()
     except Exception:
         _log_fh = None
+    # §13b/§14j/§14k: canonical audit log + own-version startup EVENT.
+    if _el is not None:
+        try:
+            _RUNLOG = _el.EventLogger(Path(args.project) / "scan.log",
+                                       errors_path=Path(args.project) / "errors.log")
+            _RUNLOG.event(f"Aether v{VERSION} started")
+        except Exception:
+            _RUNLOG = None
 
     if args.interface:
         config["interface"] = args.interface
