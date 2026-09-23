@@ -232,8 +232,21 @@ def phase_brew(dry_run: bool) -> None:
     else:
         base_cmd = [brew_bin]
 
-    info(f"Installing brew packages: {' '.join(BREW_PACKAGES)}")
-    run(base_cmd + ["install"] + BREW_PACKAGES, dry_run=dry_run)
+    try:
+        _installed = set(subprocess.run(
+            base_cmd + ["list", "--formula", "-1"],
+            capture_output=True, text=True, check=True).stdout.strip().splitlines())
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        _installed = set()
+    _missing = [p for p in BREW_PACKAGES if p not in _installed]
+    for p in BREW_PACKAGES:
+        if p in _installed:
+            info(f"✓ {p} already installed")
+    if _missing:
+        info(f"Installing brew packages: {' '.join(_missing)}")
+        run(base_cmd + ["install"] + _missing, dry_run=dry_run)
+    else:
+        info("All brew packages already installed.")
 
 
 # ---------------------------------------------------------------------------
