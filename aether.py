@@ -605,10 +605,74 @@ _ANSI_ESC = re.compile(r'\x1b(?:\[[0-9;?]*[a-zA-Z]|[()][012AB])')
 def _strip_ansi(text: str) -> str:
     return _ANSI_ESC.sub('', text)
 
+# ── Per-subprocess memory limit ──────────────────────────────────────────────
+_SUBPROCESS_MEM_LIMIT_BYTES = int(2 * 1024 ** 3)  # 2 GB per child process
+
+def _mem_limit_preexec():
+    """preexec_fn: cap each child's virtual address space to prevent OOM."""
+    if sys.platform == "win32":
+        return
+    try:
+        import resource as _rlim
+        _rlim.setrlimit(_rlim.RLIMIT_AS,
+                        (_SUBPROCESS_MEM_LIMIT_BYTES, _SUBPROCESS_MEM_LIMIT_BYTES))
+    except (AttributeError, ValueError, OSError):
+        pass
+
+_tracked_procs: list = []
+_tracked_procs_lock = threading.Lock()
+
+def _track_proc(proc):
+    with _tracked_procs_lock:
+        _tracked_procs.append(proc)
+
+def _start_oom_watchdog(threshold_pct=90, interval=15):
+    """Kill the largest tracked subprocess when system memory exceeds threshold."""
+    try:
+        import psutil as _psw
+    except ImportError:
+        return None
+
+    def _watchdog():
+        while True:
+            try:
+                time.sleep(interval)
+                mem = _psw.virtual_memory()
+                if mem.percent < threshold_pct:
+                    continue
+                with _tracked_procs_lock:
+                    _tracked_procs[:] = [p for p in _tracked_procs if p.poll() is None]
+                    live = list(_tracked_procs)
+                if not live:
+                    continue
+                biggest, biggest_rss = None, 0
+                for p in live:
+                    try:
+                        pi = _psw.Process(p.pid)
+                        rss = pi.memory_info().rss
+                        if rss > biggest_rss:
+                            biggest, biggest_rss = p, rss
+                    except (_psw.NoSuchProcess, _psw.AccessDenied, OSError):
+                        pass
+                if biggest and biggest_rss > 100 * 1024 * 1024:
+                    try:
+                        biggest.kill()
+                    except OSError:
+                        pass
+            except Exception:
+                pass
+
+    _t = threading.Thread(target=_watchdog, daemon=True, name="ae-oom-watchdog")
+    _t.start()
+    return _t
+
 
 def _popen(cmd: list, **kwargs) -> subprocess.Popen:
     kwargs.setdefault("stdin", subprocess.DEVNULL)
+    if "preexec_fn" not in kwargs and sys.platform != "win32":
+        kwargs["preexec_fn"] = _mem_limit_preexec
     proc = subprocess.Popen(cmd, **kwargs)
+    _track_proc(proc)
     # §14: record the spawn (long-lived daemons — hostapd/dnsmasq/airodump/
     # aireplay/Responder — stream to their own logs; this records the invocation).
     try:
@@ -624,7 +688,8 @@ def _run(cmd: list, timeout: int = 60) -> tuple[str, int]:
     _st = datetime.now(timezone.utc)
     try:
         r = subprocess.run(cmd, capture_output=True, text=True,
-                           timeout=timeout, stdin=subprocess.DEVNULL)
+                           timeout=timeout, stdin=subprocess.DEVNULL,
+                           preexec_fn=_mem_limit_preexec if sys.platform != "win32" else None)
         _emit_run_log(cmd, _st, datetime.now(timezone.utc), r.returncode,
                       r.stdout, r.stderr)
         return r.stdout + r.stderr, r.returncode
@@ -6503,6 +6568,7 @@ def phase_eaptls_identity_analysis(output_dir: Path, timeout: int = 30) -> None:
 
 def main():
     args = parse_args()
+    _start_oom_watchdog()
 
     if args.list_phases:
         print("Available phases:")
