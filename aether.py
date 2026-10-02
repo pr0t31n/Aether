@@ -5379,6 +5379,20 @@ def run(config: dict, project: str) -> None:
         err(f"Aborting: interface '{interface}' not available.")
         return
 
+    # ── Plugin updates ───────────────────────────────────────────────────
+    _bc_bin = shutil.which("bettercap")
+    if _bc_bin:
+        log("[*] Updating bettercap caplets…")
+        try:
+            subprocess.run(
+                [_bc_bin, "-eval", "caplets.update; quit"],
+                capture_output=True, text=True, timeout=120)
+            log("[+] bettercap caplets updated.")
+        except subprocess.TimeoutExpired:
+            log("[~] bettercap caplets update timed out — continuing.")
+        except Exception as _e:
+            log(f"[~] bettercap caplets update skipped: {_e}")
+
     # Build wordlists before phases start
     # Stack order: base list(s) → website scrape → domain derivation
     # When multiple base wordlists are given (list[str]) they are merged into one
