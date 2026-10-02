@@ -162,6 +162,14 @@ APT_PACKAGES = [
     "libssl-dev", "libpcap-dev",
     # Python / git build essentials
     "python3-pip", "python3-dev", "git",
+    # Wireshark CLI for packet capture analysis (Phase 10 / post-connection)
+    "tshark",
+    # WPA supplicant control (wpa_cli for WPA enterprise / phase 5)
+    "wpasupplicant",
+    # DNS lookup (dig) for post-connection discovery
+    "dnsutils",
+    # HTTP client for captive portal / connectivity checks
+    "curl",
 ]
 
 DNF_PACKAGES = [
@@ -169,12 +177,14 @@ DNF_PACKAGES = [
     "iproute", "net-tools", "python3-pip", "python3-devel", "git",
     "openssl-devel", "libpcap-devel", "gcc", "make",
     "libnl3-devel", "dnsmasq", "nmap", "dsniff", "mdk4",
+    "wireshark-cli", "wpa_supplicant", "bind-utils", "curl",
 ]
 
 ZYPPER_PACKAGES = [
     "aircrack-ng", "hashcat", "reaver", "iw", "wireless-tools", "iproute2",
     "net-tools", "python3-pip", "python3-devel", "git",
     "gcc", "make", "libnl3-devel", "dnsmasq", "nmap", "dsniff",
+    "wireshark", "wpa_supplicant", "bind-utils", "curl",
 ]
 
 BREW_PACKAGES = ["aircrack-ng", "hashcat"]
