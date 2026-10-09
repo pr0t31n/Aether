@@ -206,6 +206,12 @@ except Exception:
     _el = None
 _RUNLOG = None
 
+try:
+    import pr0t31n_pause as _pp
+except ImportError:
+    _pp = None
+_PAUSE = None
+
 
 def _tok(token: str, msg: str) -> None:
     print(f"{token} {msg}", flush=True)
@@ -5450,13 +5456,19 @@ def run(config: dict, project: str) -> None:
             timeout=30, channel=scan_channel,
         )
 
+        if _PAUSE and _PAUSE.check_and_pause(): sys.exit(_pp.EXIT_PAUSED)
+
         if phases_cfg.get("wep", True):
             phase_wep(active_monitor, target_aps, output_dir, timeout)
+
+        if _PAUSE and _PAUSE.check_and_pause(): sys.exit(_pp.EXIT_PAUSED)
 
         if phases_cfg.get("pmkid", True):
             phase_pmkid(active_monitor, target_aps, output_dir,
                         timeout=min(timeout, 120), wordlist=_effective_wl,
                         hashcat_rules=hashcat_rules)
+
+        if _PAUSE and _PAUSE.check_and_pause(): sys.exit(_pp.EXIT_PAUSED)
 
         if phases_cfg.get("pmkid_roam", False):
             phase_pmkid_roam(active_monitor, target_aps, output_dir,
@@ -5464,17 +5476,23 @@ def run(config: dict, project: str) -> None:
                               wordlist=_effective_wl,
                               hashcat_rules=hashcat_rules)
 
+        if _PAUSE and _PAUSE.check_and_pause(): sys.exit(_pp.EXIT_PAUSED)
+
         if phases_cfg.get("wpa_handshake", True):
             phase_wifite(
                 active_monitor, target_ssids, effective_bssids,
                 enriched_aps, _effective_wl, output_dir, timeout,
             )
 
+        if _PAUSE and _PAUSE.check_and_pause(): sys.exit(_pp.EXIT_PAUSED)
+
         if phases_cfg.get("deauth_handshake", True):
             phase_deauth_handshake(
                 active_monitor, enriched_aps, output_dir,
                 _effective_wl, timeout, deauth_packets,
             )
+
+        if _PAUSE and _PAUSE.check_and_pause(): sys.exit(_pp.EXIT_PAUSED)
 
         if phases_cfg.get("wpa_enterprise", False):
             phase_eaphammer(
@@ -5485,6 +5503,8 @@ def run(config: dict, project: str) -> None:
                 timeout=timeout,
                 asleap_path=asleap_path,
             )
+
+        if _PAUSE and _PAUSE.check_and_pause(): sys.exit(_pp.EXIT_PAUSED)
 
         if phases_cfg.get("dragonblood_sae", True):
             ds_cfg = config.get("dragonslayer", {})
@@ -5498,6 +5518,8 @@ def run(config: dict, project: str) -> None:
                 timeout=timeout,
             )
 
+        if _PAUSE and _PAUSE.check_and_pause(): sys.exit(_pp.EXIT_PAUSED)
+
         if phases_cfg.get("dragonblood_drain", False):
             phase_dragondrain(
                 active_monitor, target_aps,
@@ -5509,26 +5531,36 @@ def run(config: dict, project: str) -> None:
         # Collect any PSKs cracked in earlier phases for use by the rogue AP
         cracked_psks = _collect_cracked_psks(output_dir)
 
+        if _PAUSE and _PAUSE.check_and_pause(): sys.exit(_pp.EXIT_PAUSED)
+
         if phases_cfg.get("rogue_ap", False):
             phase_rogue_ap(
                 active_monitor, interface, target_aps, enriched_aps,
                 output_dir, rogue_cfg, timeout, cracked_psks,
             )
 
+        if _PAUSE and _PAUSE.check_and_pause(): sys.exit(_pp.EXIT_PAUSED)
+
         if phases_cfg.get("karma", False):
             phase_karma(
                 active_monitor, interface, output_dir, rogue_cfg, timeout,
             )
+
+        if _PAUSE and _PAUSE.check_and_pause(): sys.exit(_pp.EXIT_PAUSED)
 
         if phases_cfg.get("mana_loud", False):
             phase_mana_loud(
                 active_monitor, interface, output_dir, rogue_cfg, timeout,
             )
 
+        if _PAUSE and _PAUSE.check_and_pause(): sys.exit(_pp.EXIT_PAUSED)
+
         if phases_cfg.get("client_attacks", True):
             phase_client_attacks(
                 active_monitor, target_aps, enriched_aps, output_dir, timeout,
             )
+
+        if _PAUSE and _PAUSE.check_and_pause(): sys.exit(_pp.EXIT_PAUSED)
 
         if phases_cfg.get("eap_downgrade", False):
             phase_eap_downgrade(
@@ -5537,6 +5569,8 @@ def run(config: dict, project: str) -> None:
                 output_dir, timeout,
             )
 
+        if _PAUSE and _PAUSE.check_and_pause(): sys.exit(_pp.EXIT_PAUSED)
+
         if phases_cfg.get("eap_fast_anon", False):
             phase_eap_fast_anon(
                 active_monitor, target_aps,
@@ -5544,11 +5578,15 @@ def run(config: dict, project: str) -> None:
                 output_dir, timeout,
             )
 
+        if _PAUSE and _PAUSE.check_and_pause(): sys.exit(_pp.EXIT_PAUSED)
+
         if phases_cfg.get("sae_downgrade", False):
             phase_sae_downgrade(
                 active_monitor, interface, target_aps, enriched_aps,
                 output_dir, rogue_cfg, timeout,
             )
+
+        if _PAUSE and _PAUSE.check_and_pause(): sys.exit(_pp.EXIT_PAUSED)
 
         if phases_cfg.get("legacy_attacks", True):
             phase_legacy_attacks(
@@ -5560,19 +5598,29 @@ def run(config: dict, project: str) -> None:
         # Phase 0-IV-VII: Cert/iPSK/captive-portal/identity analysis —
         # run AFTER capture-producing phases (wifite, deauth-handshake,
         # eaphammer) so the analysis has pcaps to parse.
+        if _PAUSE and _PAUSE.check_and_pause(): sys.exit(_pp.EXIT_PAUSED)
+
         if phases_cfg.get("server_cert_analysis", True):
             phase_server_cert_analysis(target_aps, output_dir, timeout=60)
+
+        if _PAUSE and _PAUSE.check_and_pause(): sys.exit(_pp.EXIT_PAUSED)
 
         if phases_cfg.get("ipsk_test", True):
             phase_ipsk_test(active_monitor, interface, enriched_aps,
                             output_dir, timeout=120)
 
+        if _PAUSE and _PAUSE.check_and_pause(): sys.exit(_pp.EXIT_PAUSED)
+
         if phases_cfg.get("captive_portal_test", True):
             phase_captive_portal_test(target_aps, output_dir,
                                        primary_iface=interface, timeout=60)
 
+        if _PAUSE and _PAUSE.check_and_pause(): sys.exit(_pp.EXIT_PAUSED)
+
         if phases_cfg.get("eaptls_identity_analysis", True):
             phase_eaptls_identity_analysis(output_dir, timeout=30)
+
+        if _PAUSE and _PAUSE.check_and_pause(): sys.exit(_pp.EXIT_PAUSED)
 
         if phases_cfg.get("post_connection", False):
             _ap_iface = (rogue_cfg.get("ap_interface") or "").strip()
@@ -5591,6 +5639,8 @@ def run(config: dict, project: str) -> None:
             except Exception:
                 pass
 
+    if _PAUSE and _PAUSE.check_and_pause(): sys.exit(_pp.EXIT_PAUSED)
+
     # KRACK runs after monitor mode is disabled — it needs wlan0 in managed
     # mode; running it while the interface is wlan0mon causes hostapd/scapy
     # to fail with "Interface not found".
@@ -5603,6 +5653,9 @@ def run(config: dict, project: str) -> None:
         )
 
     save_findings(output_dir)
+
+    if _PAUSE:
+        _PAUSE.write_stop_reason("completed", "all_phases_done")
 
     meta = {
         "version": VERSION,
@@ -6667,6 +6720,15 @@ def main():
             _RUNLOG.event(f"Aether v{VERSION} started")
         except Exception:
             _RUNLOG = None
+
+    global _PAUSE
+    if _pp is not None:
+        _PAUSE = _pp.PauseManager(args.project, "aether")
+        _PAUSE.start_watcher(grace_period=60)
+        _resumed = os.environ.get("CRUCIBLE_RESUME") == "1"
+        _PAUSE.log_run_type(resumed=_resumed)
+        if _resumed:
+            _PAUSE.cleanup_incomplete()
 
     if args.interface:
         config["interface"] = args.interface
