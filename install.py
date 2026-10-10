@@ -351,6 +351,27 @@ GIT_REPOS = [
 ]
 
 
+def _pip_installed(pkg_spec: str) -> bool:
+    """Check whether a pip package is already importable."""
+    import importlib.util
+    name = pkg_spec.split(">=")[0].split("==")[0].split("[")[0].split("<")[0].strip()
+    _IMPORT_MAP = {
+        "python-whois": "whois", "beautifulsoup4": "bs4", "python-docx": "docx",
+        "pyOpenSSL": "OpenSSL", "dnspython": "dns", "pyyaml": "yaml",
+        "Pillow": "PIL", "charset-normalizer": "charset_normalizer",
+        "flask-cors": "flask_cors", "flask-socketio": "flask_socketio",
+        "flask-login": "flask_login", "python-engineio": "engineio",
+        "python-socketio": "socketio", "python-dotenv": "dotenv",
+        "python-nmap": "nmap", "python-dateutil": "dateutil",
+        "service_identity": "service_identity", "scapy": "scapy",
+    }
+    mod = _IMPORT_MAP.get(name, name.replace("-", "_"))
+    try:
+        return importlib.util.find_spec(mod) is not None
+    except (ModuleNotFoundError, ValueError):
+        return False
+
+
 def _find_requirements(dest: str, hinted_path: str) -> str | None:
     """Locate a requirements file.
 
@@ -417,11 +438,24 @@ def _install_requirements_filtered(label: str, req_path: str,
     if not kept:
         info(f"{label}: no remaining requirements after filtering — skipping")
         return
+    needed = []
+    for line in kept:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or stripped.startswith("-"):
+            needed.append(line)
+            continue
+        if _pip_installed(stripped):
+            info(f"{label}:   ✓ {stripped} already installed")
+        else:
+            needed.append(line)
+    if not needed:
+        info(f"{label}: all requirements already installed — skipping")
+        return
     with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False,
                                      prefix="aether_req_") as tmp:
-        tmp.write("\n".join(kept) + "\n")
+        tmp.write("\n".join(needed) + "\n")
         tmp_path = tmp.name
-    info(f"{label}: installing filtered requirements ({len(kept)} packages)...")
+    info(f"{label}: installing {len(needed)} missing requirements...")
     run(["pip3", "install", "--break-system-packages", "--ignore-installed",
          "-r", tmp_path], dry_run=dry_run)
     try:
@@ -461,6 +495,57 @@ def clone_or_update(repo: dict, dry_run: bool) -> None:
                 continue
             _install_requirements_filtered(label, actual, {"scapy"}, dry_run)
             continue
+
+        # pip install with -r requirements.txt — check each line individually
+        if resolved and resolved[0] == "pip3" and "-r" in resolved:
+            ri = resolved.index("-r")
+            if ri + 1 < len(resolved):
+                req_path = resolved[ri + 1]
+                actual = _find_requirements(dest, req_path)
+                if actual is None:
+                    warn(f"{label}: no requirements file found (tried {req_path}) — skipping step")
+                    continue
+                flags = [a for a in resolved[1:] if a.startswith("-") and a not in ("-r",)]
+                for line in Path(actual).read_text().splitlines():
+                    line = line.strip()
+                    if not line or line.startswith("#") or line.startswith("-"):
+                        continue
+                    if _pip_installed(line):
+                        info(f"{label}:   ✓ {line} already installed")
+                        continue
+                    info(f"{label}: pip install {line}")
+                    run(["pip3", "install", "--break-system-packages"] + flags + [line],
+                        dry_run=dry_run)
+                continue
+
+        # pip install with individual packages — check each before installing
+        if resolved and resolved[0] == "pip3" and "install" in resolved and "-r" not in resolved:
+            flags = []
+            pkgs = []
+            past_install = False
+            for a in resolved[1:]:
+                if a == "install":
+                    past_install = True
+                    continue
+                if not past_install:
+                    continue
+                if a.startswith("-"):
+                    flags.append(a)
+                else:
+                    pkgs.append(a)
+            missing = []
+            for pkg in pkgs:
+                pkg_clean = pkg.rstrip("/")
+                if pkg_clean.startswith("/"):
+                    missing.append(pkg)
+                elif _pip_installed(pkg_clean):
+                    info(f"{label}:   ✓ {pkg} already installed")
+                else:
+                    missing.append(pkg)
+            if not missing:
+                info(f"{label}: all packages already installed — skipping step")
+                continue
+            resolved = ["pip3", "install", "--break-system-packages"] + flags + missing
 
         # Resolve requirements.txt paths — hinted path may not match actual layout.
         for i, arg in enumerate(resolved):
