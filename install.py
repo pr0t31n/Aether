@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # install.py — Aether Wireless Penetration Testing Orchestrator
-# VERSION: 1.5.2 (referenced from /opt/pr0t31n/Aether/VERSION — do not bump here)
+# VERSION: 1.5.3 (referenced from /opt/pr0t31n/Aether/VERSION — do not bump here)
 # Installs all dependencies for aether.py and configures the system.
 
 import argparse
@@ -284,14 +284,16 @@ def phase_go(dry_run: bool) -> None:
 # ---------------------------------------------------------------------------
 
 GIT_REPOS = [
-    # krackattacks pins scapy==2.6.1 — must install BEFORE wifite2 so that
-    # wifite2's scapy>=2.7.1rc1, installed last, becomes the active version.
+    # krackattacks pins scapy==2.6.1 in requirements.txt, but wifite2 needs
+    # scapy>=2.7.1rc1.  Rather than installing the old pin and overwriting it,
+    # filter scapy out of krackattacks' requirements entirely — the scapy
+    # version installed by wifite2 (last) is the one that stays.
     {
         "url":   "https://github.com/vanhoefm/krackattacks-scripts",
         "dest":  "/opt/krackattacks-scripts",
         "label": "krackattacks-scripts",
         "post_cmds": [
-            ["pip3", "install", "--break-system-packages", "--ignore-installed", "-r",
+            ["__filter_scapy__",
              "/opt/krackattacks-scripts/krackattack/requirements.txt"],
         ],
     },
@@ -392,6 +394,42 @@ def _find_makefile(dest: str, hinted_dir: str) -> str | None:
     return None
 
 
+def _install_requirements_filtered(label: str, req_path: str,
+                                   exclude: set, dry_run: bool) -> None:
+    """Install requirements.txt with certain packages filtered out."""
+    import tempfile
+    try:
+        lines = Path(req_path).read_text().splitlines()
+    except OSError as exc:
+        error(f"{label}: could not read {req_path}: {exc}")
+        return
+    kept = []
+    dropped = []
+    for line in lines:
+        pkg = line.strip().split("==")[0].split(">=")[0].split("<=")[0].split(
+            "!=")[0].split("~=")[0].split("<")[0].split(">")[0].strip().lower()
+        if pkg in exclude:
+            dropped.append(line.strip())
+        else:
+            kept.append(line)
+    if dropped:
+        info(f"{label}: filtered out from requirements: {', '.join(dropped)}")
+    if not kept:
+        info(f"{label}: no remaining requirements after filtering — skipping")
+        return
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False,
+                                     prefix="aether_req_") as tmp:
+        tmp.write("\n".join(kept) + "\n")
+        tmp_path = tmp.name
+    info(f"{label}: installing filtered requirements ({len(kept)} packages)...")
+    run(["pip3", "install", "--break-system-packages", "--ignore-installed",
+         "-r", tmp_path], dry_run=dry_run)
+    try:
+        Path(tmp_path).unlink()
+    except OSError:
+        pass
+
+
 def clone_or_update(repo: dict, dry_run: bool) -> None:
     url      = repo["url"]
     dest     = repo["dest"]
@@ -413,6 +451,16 @@ def clone_or_update(repo: dict, dry_run: bool) -> None:
     for cmd in repo.get("post_cmds") or []:
         resolved: list = list(cmd)
         skip = False
+
+        # __filter_scapy__ — install requirements.txt with scapy lines removed
+        if resolved and resolved[0] == "__filter_scapy__":
+            req_path = resolved[1] if len(resolved) > 1 else ""
+            actual = _find_requirements(dest, req_path)
+            if actual is None:
+                warn(f"{label}: no requirements file found (tried {req_path}) — skipping")
+                continue
+            _install_requirements_filtered(label, actual, {"scapy"}, dry_run)
+            continue
 
         # Resolve requirements.txt paths — hinted path may not match actual layout.
         for i, arg in enumerate(resolved):
