@@ -302,7 +302,7 @@ GIT_REPOS = [
         "dest":  "/opt/dragonslayer",
         "label": "dragonslayer",
         "post_cmds": [
-            ["pip3", "install", "--break-system-packages", "--ignore-installed", "-r",
+            ["pip3", "install", "--break-system-packages", "-r",
              "/opt/dragonslayer/requirements.txt"],
         ],
     },
@@ -322,11 +322,11 @@ GIT_REPOS = [
         "post_cmds": [
             # requirements.txt — resolved at runtime via _find_requirements().
             # If missing, the step is skipped and known deps are installed below.
-            ["pip3", "install", "--break-system-packages", "--ignore-installed", "-r",
+            ["pip3", "install", "--break-system-packages", "-r",
              "/opt/eaphammer/requirements.txt"],
             # Explicit known deps — covers the case where requirements.txt is absent.
             # flask-cors is the first thing eaphammer imports; omitting it aborts --setup.
-            ["pip3", "install", "--break-system-packages", "--ignore-installed",
+            ["pip3", "install", "--break-system-packages",
              "flask-cors", "flask", "twisted", "service_identity",
              "pyOpenSSL", "cryptography", "passlib", "netaddr", "pem"],
             # NOTE: eaphammer --setup (hostapd-wpe compilation) is intentionally
@@ -344,9 +344,9 @@ GIT_REPOS = [
         "dest":  "/opt/wifite2",
         "label": "wifite2",
         "post_cmds": [
-            ["pip3", "install", "--break-system-packages", "--ignore-installed",
-             "/opt/wifite2/"],
+            ["pip3", "install", "--break-system-packages", "/opt/wifite2/"],
         ],
+        "skip_if": "wifite2",
     },
 ]
 
@@ -456,7 +456,7 @@ def _install_requirements_filtered(label: str, req_path: str,
         tmp.write("\n".join(needed) + "\n")
         tmp_path = tmp.name
     info(f"{label}: installing {len(needed)} missing requirements...")
-    run(["pip3", "install", "--break-system-packages", "--ignore-installed",
+    run(["pip3", "install", "--break-system-packages",
          "-r", tmp_path], dry_run=dry_run)
     try:
         Path(tmp_path).unlink()
@@ -481,6 +481,11 @@ def clone_or_update(repo: dict, dry_run: bool) -> None:
         if rc != 0:
             error(f"{label}: clone failed — skipping post-install steps.")
             return
+
+    skip_if = repo.get("skip_if")
+    if skip_if and _pip_installed(skip_if):
+        info(f"{label}: {skip_if} already installed — skipping post-install")
+        return
 
     for cmd in repo.get("post_cmds") or []:
         resolved: list = list(cmd)
