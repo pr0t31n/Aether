@@ -346,7 +346,7 @@ GIT_REPOS = [
         "post_cmds": [
             ["pip3", "install", "--break-system-packages", "/opt/wifite2/"],
         ],
-        "skip_if": "wifite2",
+        "skip_if": "bin:wifite",
     },
 ]
 
@@ -364,6 +364,7 @@ def _pip_installed(pkg_spec: str) -> bool:
         "python-socketio": "socketio", "python-dotenv": "dotenv",
         "python-nmap": "nmap", "python-dateutil": "dateutil",
         "service_identity": "service_identity", "scapy": "scapy",
+        "pycryptodome": "Crypto", "pycryptodomex": "Cryptodome",
     }
     mod = _IMPORT_MAP.get(name, name.replace("-", "_"))
     try:
@@ -483,9 +484,15 @@ def clone_or_update(repo: dict, dry_run: bool) -> None:
             return
 
     skip_if = repo.get("skip_if")
-    if skip_if and _pip_installed(skip_if):
-        info(f"{label}: {skip_if} already installed — skipping post-install")
-        return
+    if skip_if:
+        if skip_if.startswith("bin:"):
+            bin_name = skip_if[4:]
+            if shutil.which(bin_name):
+                info(f"{label}: {bin_name} found — skipping post-install")
+                return
+        elif _pip_installed(skip_if):
+            info(f"{label}: {skip_if} already installed — skipping post-install")
+            return
 
     for cmd in repo.get("post_cmds") or []:
         resolved: list = list(cmd)
@@ -550,7 +557,8 @@ def clone_or_update(repo: dict, dry_run: bool) -> None:
             if not missing:
                 info(f"{label}: all packages already installed — skipping step")
                 continue
-            resolved = ["pip3", "install", "--break-system-packages"] + flags + missing
+            deduped = list(dict.fromkeys(["--break-system-packages"] + flags))
+            resolved = ["pip3", "install"] + deduped + missing
 
         # Resolve requirements.txt paths — hinted path may not match actual layout.
         for i, arg in enumerate(resolved):
