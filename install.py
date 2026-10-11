@@ -37,6 +37,7 @@ def phase_header(title: str) -> None:
 def info(msg: str)    -> None: cprint(f"  [*] {msg}", BLUE)
 def success(msg: str) -> None: cprint(f"  [+] {msg}", GREEN)
 def warn(msg: str)    -> None: cprint(f"  [!] {msg}", YELLOW)
+def note(msg: str)    -> None: cprint(f"  [i] {msg}", YELLOW)
 def error(msg: str)   -> None: cprint(f"  [-] {msg}", RED)
 
 # ---------------------------------------------------------------------------
@@ -235,7 +236,7 @@ def phase_brew(dry_run: bool) -> None:
     if is_root():
         sudo_user = os.environ.get("SUDO_USER", "")
         if not sudo_user:
-            warn("Running as root but SUDO_USER is not set — skipping brew install "
+            note("Running as root but SUDO_USER is not set — skipping brew install "
                  "to avoid corrupting Homebrew. Re-run as your normal user.")
             return
         base_cmd = ["sudo", "-u", sudo_user, brew_bin]
@@ -412,7 +413,7 @@ def _find_makefile(dest: str, hinted_dir: str) -> str | None:
                 continue
             warn(f"Makefile not at {hinted_dir}; building in {mf.parent} instead")
             return str(mf.parent)
-    warn(f"No suitable Makefile found under {dest} — skipping build step")
+    note(f"No suitable Makefile found under {dest} — skipping build step")
     return None
 
 
@@ -503,7 +504,7 @@ def clone_or_update(repo: dict, dry_run: bool) -> None:
             req_path = resolved[1] if len(resolved) > 1 else ""
             actual = _find_requirements(dest, req_path)
             if actual is None:
-                warn(f"{label}: no requirements file found (tried {req_path}) — skipping")
+                note(f"{label}: no requirements file found (tried {req_path}) — skipping")
                 continue
             _install_requirements_filtered(label, actual, {"scapy"}, dry_run)
             continue
@@ -515,7 +516,7 @@ def clone_or_update(repo: dict, dry_run: bool) -> None:
                 req_path = resolved[ri + 1]
                 actual = _find_requirements(dest, req_path)
                 if actual is None:
-                    warn(f"{label}: no requirements file found (tried {req_path}) — skipping step")
+                    note(f"{label}: no requirements file found (tried {req_path}) — skipping step")
                     continue
                 flags = [a for a in resolved[1:] if a.startswith("-") and a not in ("-r",)]
                 for line in Path(actual).read_text().splitlines():
@@ -565,7 +566,7 @@ def clone_or_update(repo: dict, dry_run: bool) -> None:
             if isinstance(arg, str) and arg.endswith("requirements.txt"):
                 actual = _find_requirements(dest, arg)
                 if actual is None:
-                    warn(f"{label}: no requirements file found (tried {arg}) — skipping step")
+                    note(f"{label}: no requirements file found (tried {arg}) — skipping step")
                     skip = True
                     break
                 resolved[i] = actual
@@ -578,7 +579,7 @@ def clone_or_update(repo: dict, dry_run: bool) -> None:
             if ci + 1 < len(resolved):
                 actual_dir = _find_makefile(dest, resolved[ci + 1])
                 if actual_dir is None:
-                    warn(f"{label}: no Makefile found under {dest} — skipping build")
+                    note(f"{label}: no Makefile found under {dest} — skipping build")
                     skip = True
                 else:
                     resolved[ci + 1] = actual_dir
@@ -592,7 +593,7 @@ def clone_or_update(repo: dict, dry_run: bool) -> None:
 def phase_git(os_id: str, dry_run: bool) -> None:
     phase_header("PHASE 4 — Git Repositories")
     if os_id == "macos":
-        warn("Skipping git tool clones on macOS — these tools require Linux.")
+        note("Skipping git tool clones on macOS — these tools require Linux.")
         return
     for repo in GIT_REPOS:
         clone_or_update(repo, dry_run)
@@ -784,7 +785,7 @@ def phase_wordlists(dry_run: bool) -> None:
         return
 
     if not is_root():
-        warn(f"Not running as root — cannot write to {wl_dir}.")
+        note(f"Not running as root — cannot write to {wl_dir}.")
         warn(f"Manually: sudo curl -sSL -o {target} {url}")
         return
 
@@ -852,7 +853,7 @@ def phase_verify() -> None:
     if all_ok:
         success("All tools verified successfully.")
     else:
-        warn("Some tools were not found. Check the output above and install manually if needed.")
+        note("Some tools were not found. Check the output above and install manually if needed.")
 
 
 # ---------------------------------------------------------------------------
@@ -912,7 +913,7 @@ def main() -> None:
         elif os_id == "macos":
             phase_brew(dry_run)
         else:
-            warn(f"Unknown OS '{os_id}' — skipping system package phase.")
+            note(f"Unknown OS '{os_id}' — skipping system package phase.")
     else:
         info("Skipping system package phase (--skip-apt).")
 
@@ -939,7 +940,7 @@ def main() -> None:
         if is_root():
             phase_symlinks(dry_run)
         else:
-            warn("Not running as root — skipping symlink creation.")
+            note("Not running as root — skipping symlink creation.")
     elif dry_run:
         phase_symlinks(dry_run)
 
@@ -950,7 +951,7 @@ def main() -> None:
         phase_nm_config(dry_run)
         phase_mt76_quirks(dry_run)
     else:
-        warn("Not running as root — skipping NM exclusion + mt76 quirks.")
+        note("Not running as root — skipping NM exclusion + mt76 quirks.")
 
     # Phase 6 — WPA wordlists (SecLists probable-v2-wpa-top4800.txt for Spectre-managed runs)
     phase_wordlists(dry_run)
