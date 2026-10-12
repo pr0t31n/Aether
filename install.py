@@ -597,10 +597,10 @@ def phase_git(os_id: str, dry_run: bool) -> None:
         return
     for repo in GIT_REPOS:
         clone_or_update(repo, dry_run)
-    warn("eaphammer --setup (hostapd-wpe compilation) was skipped.")
-    warn("Python 3.13 + system dnspython >= 2.4 conflict prevents it from running.")
-    warn("To compile hostapd-wpe manually after resolving the conflict:")
-    warn("  python3 /opt/eaphammer/eaphammer --setup")
+    note("eaphammer --setup (hostapd-wpe compilation) was skipped.")
+    note("Python 3.13 + system dnspython >= 2.4 conflict prevents it from running.")
+    note("To compile hostapd-wpe manually after resolving the conflict:")
+    note("  python3 /opt/eaphammer/eaphammer --setup")
     success("Git phase complete.")
 
 
