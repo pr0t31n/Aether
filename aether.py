@@ -236,7 +236,31 @@ def _save_checkpoint(project_dir):
 
 
 def _tok(token: str, msg: str) -> None:
-    print(f"{token} {msg}", flush=True)
+    if _MANAGED:
+        print(f"{token} {msg}", flush=True)
+    else:
+        ts = datetime.now().strftime("%H:%M:%S")
+        if token == "__SPECTRE_LOG__":
+            print(f"[{ts}] [*] {msg}", flush=True)
+        elif token == "__SPECTRE_ERR__":
+            print(f"[{ts}] [!] {msg}", flush=True)
+        elif token == "__SPECTRE_STATUS__":
+            try:
+                d = json.loads(msg)
+                step = f" — {d['step']}" if d.get("step") else ""
+                print(f"[{ts}] [{d.get('status','?').upper()}] "
+                      f"{d.get('label', d.get('phase','?'))}{step}", flush=True)
+            except Exception:
+                print(f"[{ts}] [STATUS] {msg}", flush=True)
+        elif token == "__SPECTRE_FINDING__":
+            try:
+                d = json.loads(msg)
+                print(f"[{ts}] [+] FINDING: [{d.get('severity','?')}] "
+                      f"{d.get('title','?')}", flush=True)
+            except Exception:
+                print(f"[{ts}] [+] FINDING: {msg[:120]}", flush=True)
+        else:
+            print(f"[{ts}] {msg}", flush=True)
     if _log_fh is not None:
         ts = datetime.now().strftime("%H:%M:%S")
         if token == "__SPECTRE_LOG__":
@@ -2470,6 +2494,7 @@ def phase_deauth_handshake(
         return
 
     status("p1c_deauth", "Phase 1c: Deauth + Handshake", "running")
+    log(f"[1c] START: Deauth + Handshake Capture — {len(aps_with_clients)} AP(s) with clients")
     deauth_dir = output_dir / "deauth_handshake"
     deauth_dir.mkdir(parents=True, exist_ok=True)
 
@@ -2553,6 +2578,7 @@ def phase_deauth_handshake(
             elif not handshake_captured:
                 log(f"[1c] No confirmed handshake for {ssid!r} — nothing to crack")
 
+    log(f"[1c] END: Deauth + Handshake — processed {len(aps_with_clients)} AP(s)")
     status("p1c_deauth", "Phase 1c: Deauth + Handshake", "complete")
 
 
@@ -2586,6 +2612,9 @@ def phase_wep(
         return
 
     status("p0_wep", "Phase 0: WEP Testing", "running")
+    log(f"[0] START: WEP Testing — {len(wep_aps)} WEP network(s) in scope")
+    for _wap in wep_aps:
+        log(f"[0]   Target: {_wap.get('ssid','?')!r} [{_wap.get('bssid','?')}] ch={_wap.get('channel','?')}")
     wep_dir = output_dir / "wep"
     wep_dir.mkdir(parents=True, exist_ok=True)
 
@@ -2685,6 +2714,7 @@ def phase_wep(
                 title_override=f"WEP Key Cracked: {ssid}",
             )
 
+    log(f"[0] END: WEP Testing — processed {len(wep_aps)} network(s)")
     status("p0_wep", "Phase 0: WEP Testing", "complete")
 
 
@@ -2718,6 +2748,7 @@ def phase_pmkid(
         return
 
     status("p1a_pmkid", "Phase 1a: PMKID Capture", "running")
+    log(f"[1a] START: PMKID Clientless Capture — {len(scoped_aps)} AP(s) in scope, timeout={timeout}s")
     pmkid_dir = output_dir / "pmkid"
     pmkid_dir.mkdir(parents=True, exist_ok=True)
 
@@ -2840,6 +2871,7 @@ def phase_pmkid(
                             )
                             break
 
+    log("[1a] END: PMKID Capture — hash extraction and cracking attempts complete")
     status("p1a_pmkid", "Phase 1a: PMKID Capture", "complete")
 
 
@@ -2869,6 +2901,8 @@ def phase_wifite(
         return
 
     status("p1b_wifite", "Phase 1b: WPA Handshake + WPS", "running")
+    log(f"[1b] START: wifite2 WPA/WPA2/WPA3 + WPS — timeout={timeout}s, "
+        f"SSIDs={target_ssids or '(all)'}, wordlist={'yes' if wordlist else 'none'}")
     wifite_dir = output_dir / "wifite"
     wifite_dir.mkdir(parents=True, exist_ok=True)
 
@@ -3055,6 +3089,7 @@ def phase_wifite(
         log("[1b] wifite2: scanning all visible networks")
         _run_wifite([], wifite_dir / "wifite_all.txt", "(all networks)", wordlist)
 
+    log("[1b] END: wifite2 WPA Handshake + WPS attacks complete")
     status("p1b_wifite", "Phase 1b: WPA Handshake + WPS", "complete")
 
 
@@ -3080,6 +3115,7 @@ def phase_eaphammer(
         return
 
     status("p2_eaphammer", "Phase 2: WPA-Enterprise Attack", "running")
+    log(f"[2] START: EAPHammer WPA-Enterprise — auth={auth}, timeout={timeout}s")
     eap_dir = output_dir / "eaphammer"
     eap_dir.mkdir(parents=True, exist_ok=True)
 
@@ -3158,6 +3194,7 @@ def phase_eaphammer(
         if cred_found and _asleap:
             _run_asleap(_asleap, cred_dir, ssid, out_file)
 
+    log(f"[2] END: EAPHammer — tested {len(enterprise_aps[:3])} enterprise AP(s)")
     status("p2_eaphammer", "Phase 2: WPA-Enterprise Attack", "complete")
 
 
@@ -3225,6 +3262,7 @@ def phase_dragonslayer(
         return
 
     status("p3_dragonslayer", "Phase 3: WPA3 SAE Testing", "running")
+    log(f"[3] START: dragonslayer WPA3 SAE — attack mode {attack}, timeout={timeout}s")
     ds_dir = output_dir / "dragonslayer"
     ds_dir.mkdir(parents=True, exist_ok=True)
 
@@ -3288,6 +3326,7 @@ def phase_dragonslayer(
         except Exception as exc:
             err(f"dragonslayer error: {exc}")
 
+    log(f"[3] END: dragonslayer — tested {len(wpa3_aps[:3])} target(s)")
     status("p3_dragonslayer", "Phase 3: WPA3 SAE Testing", "complete")
 
 
@@ -3307,6 +3346,7 @@ def phase_dragondrain(
         return
 
     status("p4_dragondrain", "Phase 4: WPA3 Resource Exhaustion", "running")
+    log(f"[4] START: dragondrain WPA3 SAE DoS — timeout={timeout}s")
     drain_dir = output_dir / "dragondrain"
     drain_dir.mkdir(parents=True, exist_ok=True)
 
@@ -3357,6 +3397,7 @@ def phase_dragondrain(
         except Exception as exc:
             err(f"dragondrain error: {exc}")
 
+    log("[4] END: dragondrain resource exhaustion testing complete")
     status("p4_dragondrain", "Phase 4: WPA3 Resource Exhaustion", "complete")
 
 
@@ -3385,6 +3426,7 @@ def phase_krack(
         return
 
     status("p5_krack", "Phase 5: KRACK Testing", "running")
+    log(f"[5] START: KRACK key-reinstallation testing — {len(test_variants)} variants, timeout={timeout}s")
     krack_dir = output_dir / "krack"
     krack_dir.mkdir(parents=True, exist_ok=True)
 
@@ -3441,6 +3483,7 @@ def phase_krack(
             except Exception as exc:
                 err(f"KRACK {variant} error: {exc}")
 
+    log("[5] END: KRACK testing complete")
     status("p5_krack", "Phase 5: KRACK Testing", "complete")
 
 
@@ -3852,6 +3895,7 @@ def phase_rogue_ap(monitor_iface: str, primary_iface: str, target_aps: list,
                    timeout: int, cracked_psks: dict = None) -> None:
     _check_pause()
     status("p6_rogue_ap", "Phase 6: Rogue AP / Evil Twin", "running")
+    log("[6a] START: Rogue AP / Evil Twin attack")
     cracked_psks = cracked_psks or {}
 
     ap_iface = (rogue_cfg.get("ap_interface") or "").strip()
@@ -4047,6 +4091,7 @@ def phase_rogue_ap(monitor_iface: str, primary_iface: str, target_aps: list,
         subprocess.run(["ip", "addr", "flush", "dev", ap_iface],
                        check=False, capture_output=True)
 
+    log("[6a] END: Rogue AP / Evil Twin complete")
     status("p6_rogue_ap", "Phase 6: Rogue AP / Evil Twin", "complete")
 
 
@@ -4056,6 +4101,7 @@ def phase_karma(monitor_iface: str, primary_iface: str, output_dir: Path,
                 rogue_cfg: dict, timeout: int) -> None:
     _check_pause()
     status("p6b_karma", "Phase 6b: KARMA / MANA Attack", "running")
+    log("[6b] START: KARMA / MANA credential harvesting")
 
     ap_iface = (rogue_cfg.get("ap_interface") or "").strip()
     if not ap_iface:
@@ -4144,6 +4190,7 @@ def phase_karma(monitor_iface: str, primary_iface: str, output_dir: Path,
         status("p6b_karma", "Phase 6b: KARMA / MANA Attack", "skipped")
         return
 
+    log("[6b] END: KARMA / MANA attack complete")
     status("p6b_karma", "Phase 6b: KARMA / MANA Attack", "complete")
 
 
@@ -4181,6 +4228,7 @@ def phase_client_attacks(monitor_iface: str, target_aps: list,
     _check_pause()
     status("p7_client", "Phase 7: Client-Side / Management Frame Attacks", "running")
     aps = target_aps or enriched_aps
+    log(f"[7] START: Client-Side / Management Frame Attacks — {len(aps)} AP(s)")
     ca_dir = output_dir / "client_attacks"
     ca_dir.mkdir(exist_ok=True)
     results = {"pmf": [], "btm": [], "probes": []}
@@ -4296,6 +4344,7 @@ def phase_client_attacks(monitor_iface: str, target_aps: list,
 
     results["btm"]    = btm_results
     results["probes"] = probe_data
+    log(f"[7] END: Client-Side attacks — PMF={len(results['pmf'])}, BTM={len(btm_results)}, Probes={len(probe_data)}")
     status("p7_client", "Phase 7: Client-Side / Management Frame Attacks", "complete")
 
 
@@ -4305,6 +4354,7 @@ def phase_eap_downgrade(monitor_iface: str, target_aps: list,
                          eaphammer_path: str, output_dir: Path, timeout: int) -> None:
     _check_pause()
     status("p8_eap_downgrade", "Phase 8: EAP Downgrade Attack", "running")
+    log("[8] START: EAP Downgrade — testing WPA-Enterprise APs for weak EAP methods")
 
     enterprise_aps = [
         ap for ap in target_aps
@@ -4315,6 +4365,7 @@ def phase_eap_downgrade(monitor_iface: str, target_aps: list,
         log("Phase 8: No WPA-Enterprise APs in scope — skipping EAP downgrade.")
         status("p8_eap_downgrade", "Phase 8: EAP Downgrade Attack", "skipped")
         return
+    log(f"[8] Found {len(enterprise_aps)} WPA-Enterprise AP(s)")
 
     ep_path = Path(eaphammer_path) if Path(eaphammer_path).exists() else Path(
         shutil.which("eaphammer") or "/opt/eaphammer/eaphammer"
@@ -4364,6 +4415,7 @@ def phase_eap_downgrade(monitor_iface: str, target_aps: list,
         except Exception as exc:
             err(f"Phase 8: eaphammer error for {ssid!r}: {exc}")
 
+    log(f"[8] END: EAP Downgrade — tested {len(enterprise_aps)} AP(s)")
     status("p8_eap_downgrade", "Phase 8: EAP Downgrade Attack", "complete")
 
 
@@ -4381,6 +4433,7 @@ def phase_eap_fast_anon(monitor_iface: str, target_aps: list,
                          timeout: int) -> None:
     _check_pause()
     status("p8b_eap_fast", "Phase 8b: EAP-FAST Anonymous PAC Provisioning", "running")
+    log("[8b] START: EAP-FAST Anonymous PAC Provisioning — testing for unauthenticated PAC acceptance")
 
     enterprise_aps = [
         ap for ap in target_aps
@@ -4444,6 +4497,7 @@ def phase_eap_fast_anon(monitor_iface: str, target_aps: list,
         except Exception as exc:
             err(f"Phase 8b: eaphammer EAP-FAST error for {ssid!r}: {exc}")
 
+    log(f"[8b] END: EAP-FAST Anonymous PAC — tested {len(enterprise_aps)} AP(s)")
     status("p8b_eap_fast", "Phase 8b: EAP-FAST Anonymous PAC Provisioning", "complete")
 
 
@@ -4458,6 +4512,7 @@ def phase_mana_loud(monitor_iface: str, primary_iface: str,
                      output_dir: Path, rogue_cfg: dict, timeout: int) -> None:
     _check_pause()
     status("p6c_mana_loud", "Phase 6c: MANA Loud Mode", "running")
+    log("[6c] START: MANA Loud Mode — full known-beacon SSID spam")
 
     if not shutil.which("hostapd-mana"):
         log("Phase 6c: hostapd-mana not installed — skipping MANA loud mode.")
@@ -4537,6 +4592,7 @@ def phase_mana_loud(monitor_iface: str, primary_iface: str,
         else:
             log("Phase 6c: MANA collected no probes or credentials")
 
+    log("[6c] END: MANA Loud Mode complete")
     status("p6c_mana_loud", "Phase 6c: MANA Loud Mode", "complete")
 
 
@@ -4580,6 +4636,7 @@ def phase_pmkid_roam(monitor_iface: str, target_aps: list,
         return
 
     status("p1c_pmkid_roam", "Phase 1c: PMKID Roam Capture", "running")
+    log(f"[1c-roam] START: PMKID Roam Capture — {len(multi_ap)} multi-AP ESS(s), timeout={timeout}s")
     roam_dir = output_dir / "pmkid_roam"
     roam_dir.mkdir(parents=True, exist_ok=True)
 
@@ -4652,6 +4709,7 @@ def phase_pmkid_roam(monitor_iface: str, target_aps: list,
                     title_override=f"PMKID Captured from FT Roam Event: {ssid_from_hash}",
                 )
 
+    log("[1c-roam] END: PMKID Roam Capture complete")
     status("p1c_pmkid_roam", "Phase 1c: PMKID Roam Capture", "complete")
 
 
@@ -4662,6 +4720,7 @@ def phase_sae_downgrade(monitor_iface: str, primary_iface: str,
                          output_dir: Path, rogue_cfg: dict, timeout: int) -> None:
     _check_pause()
     status("p9_sae_downgrade", "Phase 9: SAE Transition Mode Downgrade", "running")
+    log("[9] START: SAE Transition Mode Downgrade — testing WPA3/WPA2 dual-mode APs")
 
     aps = target_aps or enriched_aps
     wpa3_transition = [
@@ -4798,6 +4857,7 @@ def phase_sae_downgrade(monitor_iface: str, primary_iface: str,
             )
         log(f"Phase 9: {ssid!r} — handshake {'captured' if handshake_found else 'not captured'}")
 
+    log(f"[9] END: SAE Transition Mode Downgrade — tested {len(wpa3_transition)} AP(s)")
     status("p9_sae_downgrade", "Phase 9: SAE Transition Mode Downgrade", "complete")
 
 
@@ -4863,6 +4923,7 @@ def phase_post_connection(ap_iface: str, output_dir: Path,
                            post_cfg: dict, timeout: int) -> None:
     _check_pause()
     status("p10_post", "Phase 10: Post-Connection Attacks", "running")
+    log("[10] START: Post-Connection Attacks — ARP poisoning, LLMNR/NBT-NS, internal scanning")
 
     if not ap_iface:
         log("Phase 10: No AP interface configured — skipping post-connection attacks.")
@@ -5055,6 +5116,7 @@ def phase_post_connection(ap_iface: str, output_dir: Path,
                 log("Phase 10c: No hosts with open ports found.")
         status("p10_portscan", "Phase 10c: Internal Network Port Scan", "complete")
 
+    log("[10] END: Post-Connection Attacks complete")
     status("p10_post", "Phase 10: Post-Connection Attacks", "complete")
 
 
@@ -5071,6 +5133,7 @@ def phase_legacy_attacks(monitor_iface: str, target_aps: list,
     _check_pause()
     status("p11_legacy", "Phase 11: Legacy / Niche Attacks", "running")
     aps    = target_aps or enriched_aps
+    log(f"[11] START: Legacy / Niche Attacks — {len(aps)} AP(s)")
     lg_dir = output_dir / "legacy_attacks"
     lg_dir.mkdir(exist_ok=True)
 
@@ -5391,6 +5454,7 @@ def phase_legacy_attacks(monitor_iface: str, target_aps: list,
         )
     status("p11_captive", "Phase 11c: Captive Portal Bypass Testing", "complete")
 
+    log("[11] END: Legacy / Niche Attacks complete")
     status("p11_legacy", "Phase 11: Legacy / Niche Attacks", "complete")
 
 # ── Main orchestrator ─────────────────────────────────────────────────────────
@@ -5527,26 +5591,36 @@ def run(config: dict, project: str) -> None:
         if _PAUSE and _PAUSE.check_and_pause(): sys.exit(_pp.EXIT_PAUSED)
 
         if phases_cfg.get("wep", True):
+            log("[orchestrator] Phase 0 (WEP) — enabled, running")
             phase_wep(active_monitor, target_aps, output_dir, timeout)
+        else:
+            log("[orchestrator] Phase 0 (WEP) — disabled in config, skipping")
 
         if _PAUSE and _PAUSE.check_and_pause(): sys.exit(_pp.EXIT_PAUSED)
 
         if phases_cfg.get("pmkid", True):
+            log("[orchestrator] Phase 1a (PMKID) — enabled, running clientless capture")
             phase_pmkid(active_monitor, target_aps, output_dir,
                         timeout=min(timeout, 120), wordlist=_effective_wl,
                         hashcat_rules=hashcat_rules)
+        else:
+            log("[orchestrator] Phase 1a (PMKID) — disabled in config, skipping")
 
         if _PAUSE and _PAUSE.check_and_pause(): sys.exit(_pp.EXIT_PAUSED)
 
         if phases_cfg.get("pmkid_roam", False):
+            log("[orchestrator] Phase 1c (PMKID Roam) — enabled, capturing FT roam events")
             phase_pmkid_roam(active_monitor, target_aps, output_dir,
                               timeout=min(timeout, 300),
                               wordlist=_effective_wl,
                               hashcat_rules=hashcat_rules)
+        else:
+            log("[orchestrator] Phase 1c (PMKID Roam) — disabled (default off), skipping")
 
         if _PAUSE and _PAUSE.check_and_pause(): sys.exit(_pp.EXIT_PAUSED)
 
         if phases_cfg.get("wpa_handshake", True):
+            log("[orchestrator] Phase 1b (wifite2) — enabled, running WPA/WPS attacks")
             phase_wifite(
                 active_monitor, target_ssids, effective_bssids,
                 enriched_aps, _effective_wl, output_dir, timeout,
@@ -5555,6 +5629,7 @@ def run(config: dict, project: str) -> None:
         if _PAUSE and _PAUSE.check_and_pause(): sys.exit(_pp.EXIT_PAUSED)
 
         if phases_cfg.get("deauth_handshake", True):
+            log("[orchestrator] Phase 1c (Deauth+Handshake) — enabled, targeting APs with clients")
             phase_deauth_handshake(
                 active_monitor, enriched_aps, output_dir,
                 _effective_wl, timeout, deauth_packets,
@@ -5563,6 +5638,7 @@ def run(config: dict, project: str) -> None:
         if _PAUSE and _PAUSE.check_and_pause(): sys.exit(_pp.EXIT_PAUSED)
 
         if phases_cfg.get("wpa_enterprise", False):
+            log("[orchestrator] Phase 2 (EAPHammer) — enabled, testing WPA-Enterprise")
             phase_eaphammer(
                 active_monitor, target_aps,
                 tools.get("eaphammer", "/opt/eaphammer/eaphammer"),
@@ -5575,6 +5651,7 @@ def run(config: dict, project: str) -> None:
         if _PAUSE and _PAUSE.check_and_pause(): sys.exit(_pp.EXIT_PAUSED)
 
         if phases_cfg.get("dragonblood_sae", True):
+            log("[orchestrator] Phase 3 (dragonslayer) — enabled, testing WPA3 SAE cryptography")
             ds_cfg = config.get("dragonslayer", {})
             phase_dragonslayer(
                 active_monitor, target_aps,
@@ -5589,6 +5666,7 @@ def run(config: dict, project: str) -> None:
         if _PAUSE and _PAUSE.check_and_pause(): sys.exit(_pp.EXIT_PAUSED)
 
         if phases_cfg.get("dragonblood_drain", False):
+            log("[orchestrator] Phase 4 (dragondrain) — enabled, testing SAE resource exhaustion")
             phase_dragondrain(
                 active_monitor, target_aps,
                 tools.get("dragondrain",
@@ -5602,6 +5680,7 @@ def run(config: dict, project: str) -> None:
         if _PAUSE and _PAUSE.check_and_pause(): sys.exit(_pp.EXIT_PAUSED)
 
         if phases_cfg.get("rogue_ap", False):
+            log("[orchestrator] Phase 6a (Rogue AP) — enabled, deploying Evil Twin")
             phase_rogue_ap(
                 active_monitor, interface, target_aps, enriched_aps,
                 output_dir, rogue_cfg, timeout, cracked_psks,
@@ -5610,6 +5689,7 @@ def run(config: dict, project: str) -> None:
         if _PAUSE and _PAUSE.check_and_pause(): sys.exit(_pp.EXIT_PAUSED)
 
         if phases_cfg.get("karma", False):
+            log("[orchestrator] Phase 6b (KARMA) — enabled, running credential harvesting")
             phase_karma(
                 active_monitor, interface, output_dir, rogue_cfg, timeout,
             )
@@ -5617,6 +5697,7 @@ def run(config: dict, project: str) -> None:
         if _PAUSE and _PAUSE.check_and_pause(): sys.exit(_pp.EXIT_PAUSED)
 
         if phases_cfg.get("mana_loud", False):
+            log("[orchestrator] Phase 6c (MANA Loud) — enabled, running beacon spam")
             phase_mana_loud(
                 active_monitor, interface, output_dir, rogue_cfg, timeout,
             )
@@ -5624,6 +5705,7 @@ def run(config: dict, project: str) -> None:
         if _PAUSE and _PAUSE.check_and_pause(): sys.exit(_pp.EXIT_PAUSED)
 
         if phases_cfg.get("client_attacks", True):
+            log("[orchestrator] Phase 7 (Client Attacks) — enabled, testing PMF/BTM/probes")
             phase_client_attacks(
                 active_monitor, target_aps, enriched_aps, output_dir, timeout,
             )
@@ -5631,6 +5713,7 @@ def run(config: dict, project: str) -> None:
         if _PAUSE and _PAUSE.check_and_pause(): sys.exit(_pp.EXIT_PAUSED)
 
         if phases_cfg.get("eap_downgrade", False):
+            log("[orchestrator] Phase 8 (EAP Downgrade) — enabled, testing weak EAP methods")
             phase_eap_downgrade(
                 active_monitor, target_aps,
                 tools.get("eaphammer", "/opt/eaphammer/eaphammer"),
@@ -5640,6 +5723,7 @@ def run(config: dict, project: str) -> None:
         if _PAUSE and _PAUSE.check_and_pause(): sys.exit(_pp.EXIT_PAUSED)
 
         if phases_cfg.get("eap_fast_anon", False):
+            log("[orchestrator] Phase 8b (EAP-FAST) — enabled, testing anonymous PAC provisioning")
             phase_eap_fast_anon(
                 active_monitor, target_aps,
                 tools.get("eaphammer", "/opt/eaphammer/eaphammer"),
@@ -5649,6 +5733,7 @@ def run(config: dict, project: str) -> None:
         if _PAUSE and _PAUSE.check_and_pause(): sys.exit(_pp.EXIT_PAUSED)
 
         if phases_cfg.get("sae_downgrade", False):
+            log("[orchestrator] Phase 9 (SAE Downgrade) — enabled, testing WPA3/WPA2 transition mode")
             phase_sae_downgrade(
                 active_monitor, interface, target_aps, enriched_aps,
                 output_dir, rogue_cfg, timeout,
@@ -5657,6 +5742,7 @@ def run(config: dict, project: str) -> None:
         if _PAUSE and _PAUSE.check_and_pause(): sys.exit(_pp.EXIT_PAUSED)
 
         if phases_cfg.get("legacy_attacks", True):
+            log("[orchestrator] Phase 11 (Legacy) — enabled, running TKIP/WPS/captive bypass")
             phase_legacy_attacks(
                 active_monitor, target_aps, enriched_aps, output_dir,
                 tools, timeout,
@@ -5669,28 +5755,33 @@ def run(config: dict, project: str) -> None:
         if _PAUSE and _PAUSE.check_and_pause(): sys.exit(_pp.EXIT_PAUSED)
 
         if phases_cfg.get("server_cert_analysis", True):
+            log("[orchestrator] Phase 0-IV (Cert Analysis) — enabled, analyzing captured EAP-TLS certs")
             phase_server_cert_analysis(target_aps, output_dir, timeout=60)
 
         if _PAUSE and _PAUSE.check_and_pause(): sys.exit(_pp.EXIT_PAUSED)
 
         if phases_cfg.get("ipsk_test", True):
+            log("[orchestrator] Phase 0-V (iPSK) — enabled, detecting Meraki per-client PSK")
             phase_ipsk_test(active_monitor, interface, enriched_aps,
                             output_dir, timeout=120)
 
         if _PAUSE and _PAUSE.check_and_pause(): sys.exit(_pp.EXIT_PAUSED)
 
         if phases_cfg.get("captive_portal_test", True):
+            log("[orchestrator] Phase 0-VI (Captive Portal) — enabled, testing splash bypass")
             phase_captive_portal_test(target_aps, output_dir,
                                        primary_iface=interface, timeout=60)
 
         if _PAUSE and _PAUSE.check_and_pause(): sys.exit(_pp.EXIT_PAUSED)
 
         if phases_cfg.get("eaptls_identity_analysis", True):
+            log("[orchestrator] Phase 0-VII (EAP Identity) — enabled, parsing EAPOL for leaked identities")
             phase_eaptls_identity_analysis(output_dir, timeout=30)
 
         if _PAUSE and _PAUSE.check_and_pause(): sys.exit(_pp.EXIT_PAUSED)
 
         if phases_cfg.get("post_connection", False):
+            log("[orchestrator] Phase 10 (Post-Connection) — enabled, running ARP/LLMNR/nmap")
             _ap_iface = (rogue_cfg.get("ap_interface") or "").strip()
             if not _ap_iface:
                 _ap_iface = _find_ap_interface([interface, active_monitor])
@@ -5713,6 +5804,7 @@ def run(config: dict, project: str) -> None:
     # mode; running it while the interface is wlan0mon causes hostapd/scapy
     # to fail with "Interface not found".
     if phases_cfg.get("krack", True):
+        log("[orchestrator] Phase 5 (KRACK) — enabled, testing key reinstallation")
         phase_krack(
             interface, target_aps,
             tools.get("krackattacks",
@@ -5922,6 +6014,7 @@ def phase_contextual_intel(enriched_aps: list, output_dir: Path) -> None:
     Emits no risk-graded findings; all output is Informational severity."""
     _check_pause()
     status("p_ctx", "Phase 0-II: Contextual Intelligence", "running")
+    log(f"[0-II] START: Contextual Intelligence — cataloging {len(enriched_aps or [])} AP(s) and clients")
     ctx_dir = output_dir / "contextual_intel"
     ctx_dir.mkdir(exist_ok=True)
 
@@ -6020,7 +6113,7 @@ def phase_contextual_intel(enriched_aps: list, output_dir: Path) -> None:
     }
     (ctx_dir / "inventory.json").write_text(
         json.dumps(snapshot, indent=2), encoding="utf-8")
-    log(f"Contextual intel: {len(snapshot['aps'])} APs, "
+    log(f"[0-II] END: Contextual Intelligence — {len(snapshot['aps'])} APs, "
         f"{len(snapshot['clients'])} clients, {len(snapshot['vendors'])} vendors, "
         f"{len(snapshot['auth_types'])} auth types observed")
     status("p_ctx", "Phase 0-II: Contextual Intelligence", "complete",
@@ -6034,6 +6127,7 @@ def phase_meraki_recon(enriched_aps: list, output_dir: Path) -> None:
     firmware fingerprinting, detect shared-BSSID multi-SSID deployments."""
     _check_pause()
     status("p_meraki", "Phase 0-III: Meraki Infrastructure Reconnaissance", "running")
+    log(f"[0-III] START: Meraki Infrastructure Reconnaissance — scanning {len(enriched_aps or [])} AP(s)")
     meraki_dir = output_dir / "meraki_recon"
     meraki_dir.mkdir(exist_ok=True)
 
@@ -6106,6 +6200,7 @@ def phase_meraki_recon(enriched_aps: list, output_dir: Path) -> None:
         "multi_ssid_aps": multi_ssid_aps,
     }, indent=2), encoding="utf-8")
 
+    log(f"[0-III] END: Meraki Recon — {len(meraki_aps)} Meraki AP(s), {len(multi_ssid_aps)} shared-radio group(s)")
     status("p_meraki", "Phase 0-III: Meraki Infrastructure Reconnaissance",
            "complete", f"{len(meraki_aps)} Meraki, {len(multi_ssid_aps)} shared")
 
@@ -6122,6 +6217,7 @@ def phase_server_cert_analysis(target_aps: list, output_dir: Path,
     handshake capture, wifite capture, etc.). Emits per-cert findings."""
     _check_pause()
     status("p_cert", "Phase 0-IV: EAP-TLS Server Certificate Analysis", "running")
+    log("[0-IV] START: EAP-TLS Server Certificate Analysis — scanning pcap files for X.509 certs")
     cert_dir = output_dir / "cert_analysis"
     cert_dir.mkdir(exist_ok=True)
 
@@ -6150,7 +6246,7 @@ def phase_server_cert_analysis(target_aps: list, output_dir: Path,
 
     (cert_dir / "certs_summary.json").write_text(
         json.dumps(cert_summaries, indent=2, default=str), encoding="utf-8")
-    log(f"Cert analysis: {len(cert_summaries)} server certs extracted/analyzed")
+    log(f"[0-IV] END: Certificate Analysis — {len(cert_summaries)} server cert(s) from {len(pcap_paths)} pcap(s)")
     status("p_cert", "Phase 0-IV: EAP-TLS Server Certificate Analysis",
            "complete", f"{len(cert_summaries)} certs analyzed")
 
@@ -6343,6 +6439,7 @@ def phase_ipsk_test(monitor_iface: str, primary_iface: str,
     when an iPSK is suspected and a known iPSK-issued MAC is observable."""
     _check_pause()
     status("p_ipsk", "Phase 0-V: Meraki iPSK Test", "running")
+    log("[0-V] START: Meraki iPSK Detection — scanning for per-client PSK assignment")
     ipsk_dir = output_dir / "ipsk_test"
     ipsk_dir.mkdir(exist_ok=True)
 
@@ -6439,6 +6536,7 @@ def phase_ipsk_test(monitor_iface: str, primary_iface: str,
                        f"observed — not iPSK or insufficient client diversity",
                        data=ipsk_evidence)
 
+    log(f"[0-V] END: Meraki iPSK Test — {len(candidates)} candidate(s) evaluated")
     status("p_ipsk", "Phase 0-V: Meraki iPSK Test", "complete",
            f"{len(candidates)} candidates evaluated")
 
@@ -6456,6 +6554,7 @@ def phase_captive_portal_test(target_aps: list, output_dir: Path,
     findings are emitted."""
     _check_pause()
     status("p_splash", "Phase 0-VI: Captive Portal / Splash Bypass Testing", "running")
+    log("[0-VI] START: Captive Portal / Splash Bypass — testing open SSIDs for bypass vectors")
     splash_dir = output_dir / "captive_portal"
     splash_dir.mkdir(exist_ok=True)
 
@@ -6565,6 +6664,7 @@ def phase_captive_portal_test(target_aps: list, output_dir: Path,
         (splash_dir / f"{ssid.replace(' ','_')}_splash.json").write_text(
             json.dumps(bypass_results, indent=2), encoding="utf-8")
 
+    log(f"[0-VI] END: Captive Portal — {len(open_ssids)} open SSID(s) probed")
     status("p_splash", "Phase 0-VI: Captive Portal / Splash Bypass Testing",
            "complete", f"{len(open_ssids)} open SSIDs probed")
 
@@ -6641,6 +6741,7 @@ def phase_eaptls_identity_analysis(output_dir: Path, timeout: int = 30) -> None:
     _check_pause()
     status("p_eaptls_id", "Phase 0-VII: EAP-TLS Identity Disclosure Analysis",
            "running")
+    log("[0-VII] START: EAP-TLS Identity Disclosure — parsing EAPOL frames for leaked identities")
     id_dir = output_dir / "eap_identity"
     id_dir.mkdir(exist_ok=True)
 
@@ -6701,6 +6802,8 @@ def phase_eaptls_identity_analysis(output_dir: Path, timeout: int = 30) -> None:
                                 "_EAP_IDENTITY_DIAGNOSTIC_DENYLIST and RFC 4282 "
                                 "NAI shape rules in aether.py."}, indent=2),
             encoding="utf-8")
+    log(f"[0-VII] END: EAP-TLS Identity — {len(identities)} identities observed"
+        + (f", {len(rejected)} rejected as artifacts" if rejected else ""))
     status("p_eaptls_id", "Phase 0-VII: EAP-TLS Identity Disclosure Analysis",
            "complete",
            f"{len(identities)} identities observed"
