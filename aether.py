@@ -213,6 +213,28 @@ except ImportError:
 _PAUSE = None
 
 
+def _check_pause():
+    if _PAUSE is not None and _PAUSE.check_and_pause():
+        sys.exit(_pp.EXIT_PAUSED)
+
+
+def _pause_sleep(seconds):
+    """Sleep for *seconds* but break early if a pause is requested."""
+    _deadline = time.monotonic() + seconds
+    while time.monotonic() < _deadline:
+        if _PAUSE is not None and _PAUSE.is_pause_requested:
+            break
+        time.sleep(min(2, max(0, _deadline - time.monotonic())))
+
+
+def _save_checkpoint(project_dir):
+    """Best-effort checkpoint: flush findings collected so far."""
+    try:
+        save_findings(Path(project_dir))
+    except Exception:
+        pass
+
+
 def _tok(token: str, msg: str) -> None:
     print(f"{token} {msg}", flush=True)
     if _log_fh is not None:
@@ -628,9 +650,14 @@ def _mem_limit_preexec():
 _tracked_procs: list = []
 _tracked_procs_lock = threading.Lock()
 
-def _track_proc(proc):
+def _track_proc(proc, operation=""):
     with _tracked_procs_lock:
         _tracked_procs.append(proc)
+    if _PAUSE is not None:
+        try:
+            _PAUSE.register(proc, operation or f"pid={proc.pid}")
+        except Exception:
+            pass
 
 def _start_oom_watchdog(threshold_pct=90, interval=15):
     """Kill the largest tracked subprocess when system memory exceeds threshold."""
@@ -679,8 +706,11 @@ def _popen(cmd: list, **kwargs) -> subprocess.Popen:
         kwargs["preexec_fn"] = _mem_limit_preexec
     proc = subprocess.Popen(cmd, **kwargs)
     _track_proc(proc)
-    # §14: record the spawn (long-lived daemons — hostapd/dnsmasq/airodump/
-    # aireplay/Responder — stream to their own logs; this records the invocation).
+    if _PAUSE is not None:
+        try:
+            _PAUSE.register(proc, " ".join(str(c) for c in cmd))
+        except Exception:
+            pass
     try:
         _now = datetime.now(timezone.utc)
         _emit_run_log(cmd, _now, _now, None, "",
@@ -691,17 +721,30 @@ def _popen(cmd: list, **kwargs) -> subprocess.Popen:
 
 
 def _run(cmd: list, timeout: int = 60) -> tuple[str, int]:
+    if _PAUSE and _PAUSE.is_pause_requested:
+        return "(paused)", -1
     _st = datetime.now(timezone.utc)
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True,
-                           timeout=timeout, stdin=subprocess.DEVNULL,
-                           preexec_fn=_mem_limit_preexec if sys.platform != "win32" else None)
-        _emit_run_log(cmd, _st, datetime.now(timezone.utc), r.returncode,
-                      r.stdout, r.stderr)
-        return r.stdout + r.stderr, r.returncode
-    except subprocess.TimeoutExpired:
-        _emit_run_log(cmd, _st, datetime.now(timezone.utc), -1, "", "(timeout)")
-        return "(timeout)", -1
+        proc = subprocess.Popen(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True, stdin=subprocess.DEVNULL,
+            preexec_fn=_mem_limit_preexec if sys.platform != "win32" else None)
+        _pause_key = None
+        if _PAUSE:
+            _pause_key = _PAUSE.register(proc, " ".join(str(c) for c in cmd))
+        try:
+            stdout, stderr = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            stdout, stderr = proc.communicate()
+            _emit_run_log(cmd, _st, datetime.now(timezone.utc), -1, "", "(timeout)")
+            return "(timeout)", -1
+        finally:
+            if _pause_key is not None:
+                _PAUSE.unregister(_pause_key)
+        _emit_run_log(cmd, _st, datetime.now(timezone.utc), proc.returncode,
+                      stdout, stderr)
+        return (stdout or "") + (stderr or ""), proc.returncode
     except Exception as exc:
         _emit_run_log(cmd, _st, datetime.now(timezone.utc), -1, "", str(exc))
         return str(exc), -1
@@ -720,6 +763,11 @@ def _kill_proc(proc: subprocess.Popen, wait_secs: int = 5) -> None:
             pass
     except Exception:
         pass
+    if _PAUSE is not None:
+        try:
+            _PAUSE.unregister(proc.pid)
+        except Exception:
+            pass
 
 
 def _readline_timed(stdout, deadline: float) -> bytes | None:
@@ -1839,6 +1887,7 @@ def scan_targets(
     NOTE: Hidden SSIDs require active probing (mdk4 probe mode or directed
     wpa_supplicant probe requests) — not implemented here; this scan is passive.
     """
+    _check_pause()
     target_bssids = target_bssids or []
     log(f"Scanning for wireless networks (timeout={timeout}s)...")
 
@@ -1873,7 +1922,7 @@ def scan_targets(
             try:
                 proc = _popen(cmd, stdout=subprocess.DEVNULL,
                               stderr=subprocess.DEVNULL)
-                time.sleep(timeout)
+                _pause_sleep(timeout)
             except Exception:
                 pass
             finally:
@@ -2150,6 +2199,7 @@ def phase_wireless_intel(
     Writes access_points.json to output_dir.
     Returns (best_ap, all_enriched_aps).
     """
+    _check_pause()
     status("p0_intel", "Phase 0-I: Wireless Intelligence", "running")
     intel_dir = output_dir / "wireless_intel"
     intel_dir.mkdir(parents=True, exist_ok=True)
@@ -2191,7 +2241,7 @@ def phase_wireless_intel(
     proc = None
     try:
         proc = _popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        time.sleep(scan_seconds)
+        _pause_sleep(scan_seconds)
     except Exception as exc:
         log(f"[0-I] airodump-ng error: {exc}")
     finally:
@@ -2266,7 +2316,7 @@ def phase_wireless_intel(
             try:
                 proc2 = _popen(cmd2, stdout=subprocess.DEVNULL,
                                stderr=subprocess.DEVNULL)
-                time.sleep(15)
+                _pause_sleep(15)
             except Exception:
                 pass
             finally:
@@ -2400,6 +2450,7 @@ def phase_deauth_handshake(
     Emits AETHER-002 only when handshake capture is confirmed by airodump-ng
     stdout — never on error output alone.
     """
+    _check_pause()
     if not shutil.which("airodump-ng"):
         status("p1c_deauth", "Phase 1c: Deauth + Handshake", "skipped",
                "airodump-ng not installed")
@@ -2450,7 +2501,7 @@ def phase_deauth_handshake(
                                stderr=subprocess.DEVNULL)
             time.sleep(3)  # let capture stabilise before deauth
             _deauth_clients(monitor_iface, bssid, channel, clients, deauth_count)
-            time.sleep(min(timeout, 90) - 3)
+            _pause_sleep(min(timeout, 90) - 3)
         finally:
             if cap_proc is not None:
                 _kill_proc(cap_proc)
@@ -2519,6 +2570,7 @@ def phase_wep(
     the attacking station is associated before injecting ARPs — required
     when the AP has no active clients.
     """
+    _check_pause()
     if not shutil.which("aircrack-ng") or not shutil.which("airodump-ng"):
         status("p0_wep", "Phase 0: WEP Testing", "skipped", "aircrack-ng not installed")
         return
@@ -2654,6 +2706,7 @@ def phase_pmkid(
 
     Tool chain: hcxdumptool → hcxpcapngtool → hashcat (-m 22000)
     """
+    _check_pause()
     if not shutil.which("hcxdumptool") or not shutil.which("hcxpcapngtool"):
         status("p1a_pmkid", "Phase 1a: PMKID Capture", "skipped",
                "hcxdumptool / hcxpcapngtool not installed")
@@ -2688,7 +2741,7 @@ def phase_pmkid(
     proc = None
     try:
         proc = _popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        time.sleep(timeout)
+        _pause_sleep(timeout)
     except Exception:
         pass
     finally:
@@ -2807,6 +2860,7 @@ def phase_wifite(
     Uses the SSID-seeded wordlist (mutations from SSID name merged with the
     base wordlist) to improve cracking success rates over wordlist alone.
     """
+    _check_pause()
     wifite_path = shutil.which("wifite") or shutil.which("wifite2")
     if not wifite_path:
         log("[~] wifite2 not installed — skipping Phase 1b")
@@ -3018,6 +3072,7 @@ def phase_eaphammer(
     After EAPHammer captures MSCHAPv2 challenge/response, asleap is run
     against the credential files to attempt offline dictionary-based cracking.
     """
+    _check_pause()
     if not os.path.exists(eaphammer_path):
         log(f"[~] EAPHammer not found at {eaphammer_path} — skipping Phase 2")
         status("p2_eaphammer", "Phase 2: WPA-Enterprise Attack", "skipped",
@@ -3163,6 +3218,7 @@ def phase_dragonslayer(
     dragonslayer_client: str, output_dir: Path,
     attack: int = 1, client_conf: str = "", timeout: int = 180,
 ) -> None:
+    _check_pause()
     if not os.path.exists(dragonslayer_client):
         log(f"[~] dragonslayer not found at {dragonslayer_client} — skipping Phase 3")
         status("p3_dragonslayer", "Phase 3: WPA3 SAE Testing", "skipped", "not installed")
@@ -3243,6 +3299,7 @@ def phase_dragondrain(
     timeout: int = 60,
 ) -> None:
     """Finding only emitted when tool output explicitly reports AP exhaustion."""
+    _check_pause()
     if not os.path.exists(dragondrain_path):
         log(f"[~] dragondrain not found — skipping Phase 4")
         status("p4_dragondrain", "Phase 4: WPA3 Resource Exhaustion", "skipped",
@@ -3310,6 +3367,7 @@ def phase_krack(
     krackattacks_path: str, output_dir: Path,
     timeout: int = 180,
 ) -> None:
+    _check_pause()
     if not os.path.exists(krackattacks_path):
         log("[~] krackattacks-scripts not found — skipping Phase 5")
         status("p5_krack", "Phase 5: KRACK Testing", "skipped", "not installed")
@@ -3792,6 +3850,7 @@ def _run_portal_server(stop_evt: threading.Event) -> None:
 def phase_rogue_ap(monitor_iface: str, primary_iface: str, target_aps: list,
                    enriched_aps: list, output_dir: Path, rogue_cfg: dict,
                    timeout: int, cracked_psks: dict = None) -> None:
+    _check_pause()
     status("p6_rogue_ap", "Phase 6: Rogue AP / Evil Twin", "running")
     cracked_psks = cracked_psks or {}
 
@@ -3912,7 +3971,7 @@ def phase_rogue_ap(monitor_iface: str, primary_iface: str, target_aps: list,
                             _run(["sudo", "aireplay-ng", "--deauth", "3",
                                   "-a", ap["bssid"], "-c", cl["mac"],
                                   monitor_iface], timeout=10)
-                    time.sleep(15)
+                    _pause_sleep(15)
             deauth_t = threading.Thread(target=_deauth_loop, daemon=True)
             deauth_t.start()
         elif deauth_cl and not has_aireplay:
@@ -3995,6 +4054,7 @@ def phase_rogue_ap(monitor_iface: str, primary_iface: str, target_aps: list,
 
 def phase_karma(monitor_iface: str, primary_iface: str, output_dir: Path,
                 rogue_cfg: dict, timeout: int) -> None:
+    _check_pause()
     status("p6b_karma", "Phase 6b: KARMA / MANA Attack", "running")
 
     ap_iface = (rogue_cfg.get("ap_interface") or "").strip()
@@ -4040,7 +4100,7 @@ def phase_karma(monitor_iface: str, primary_iface: str, output_dir: Path,
             [hostapd_mana, str(conf_path)],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
-        time.sleep(duration)
+        _pause_sleep(duration)
         _kill_proc(karma_proc)
         _kill_proc(dnsmasq_proc)
         subprocess.run(["ip", "addr", "flush", "dev", ap_iface],
@@ -4118,6 +4178,7 @@ def _send_btm_request(monitor_iface: str, client_mac: str,
 
 def phase_client_attacks(monitor_iface: str, target_aps: list,
                           enriched_aps: list, output_dir: Path, timeout: int) -> None:
+    _check_pause()
     status("p7_client", "Phase 7: Client-Side / Management Frame Attacks", "running")
     aps = target_aps or enriched_aps
     ca_dir = output_dir / "client_attacks"
@@ -4242,6 +4303,7 @@ def phase_client_attacks(monitor_iface: str, target_aps: list,
 
 def phase_eap_downgrade(monitor_iface: str, target_aps: list,
                          eaphammer_path: str, output_dir: Path, timeout: int) -> None:
+    _check_pause()
     status("p8_eap_downgrade", "Phase 8: EAP Downgrade Attack", "running")
 
     enterprise_aps = [
@@ -4317,6 +4379,7 @@ def phase_eap_downgrade(monitor_iface: str, target_aps: list,
 def phase_eap_fast_anon(monitor_iface: str, target_aps: list,
                          eaphammer_path: str, output_dir: Path,
                          timeout: int) -> None:
+    _check_pause()
     status("p8b_eap_fast", "Phase 8b: EAP-FAST Anonymous PAC Provisioning", "running")
 
     enterprise_aps = [
@@ -4393,6 +4456,7 @@ def phase_eap_fast_anon(monitor_iface: str, target_aps: list,
 
 def phase_mana_loud(monitor_iface: str, primary_iface: str,
                      output_dir: Path, rogue_cfg: dict, timeout: int) -> None:
+    _check_pause()
     status("p6c_mana_loud", "Phase 6c: MANA Loud Mode", "running")
 
     if not shutil.which("hostapd-mana"):
@@ -4435,7 +4499,7 @@ def phase_mana_loud(monitor_iface: str, primary_iface: str,
             stdout=open(log_file, "a"),
             stderr=subprocess.STDOUT,
         )
-        time.sleep(min(timeout, 180))
+        _pause_sleep(min(timeout, 180))
     except Exception as exc:
         err(f"Phase 6c: hostapd-mana error: {exc}")
     finally:
@@ -4489,6 +4553,7 @@ def phase_pmkid_roam(monitor_iface: str, target_aps: list,
                       output_dir: Path, timeout: int = 300,
                       wordlist: str | None = None,
                       hashcat_rules: list | None = None) -> None:
+    _check_pause()
     if not shutil.which("hcxdumptool") or not shutil.which("hcxpcapngtool"):
         status("p1c_pmkid_roam", "Phase 1c: PMKID Roam Capture", "skipped",
                "hcxdumptool / hcxpcapngtool not installed")
@@ -4540,7 +4605,7 @@ def phase_pmkid_roam(monitor_iface: str, target_aps: list,
     proc = None
     try:
         proc = _popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        time.sleep(timeout)
+        _pause_sleep(timeout)
     except Exception:
         pass
     finally:
@@ -4595,6 +4660,7 @@ def phase_pmkid_roam(monitor_iface: str, target_aps: list,
 def phase_sae_downgrade(monitor_iface: str, primary_iface: str,
                          target_aps: list, enriched_aps: list,
                          output_dir: Path, rogue_cfg: dict, timeout: int) -> None:
+    _check_pause()
     status("p9_sae_downgrade", "Phase 9: SAE Transition Mode Downgrade", "running")
 
     aps = target_aps or enriched_aps
@@ -4697,7 +4763,7 @@ def phase_sae_downgrade(monitor_iface: str, primary_iface: str,
                          timeout=deauth_count * 2 + 10)
             sleep_for = min(deauth_interval, duration - elapsed)
             if sleep_for > 0:
-                time.sleep(sleep_for)
+                _pause_sleep(sleep_for)
             elapsed += deauth_interval
 
         for proc in (hostapd_proc, dnsmasq_proc, airodump_proc):
@@ -4795,6 +4861,7 @@ def _iface_connection_state(iface: str) -> "tuple[bool, str, str]":
 
 def phase_post_connection(ap_iface: str, output_dir: Path,
                            post_cfg: dict, timeout: int) -> None:
+    _check_pause()
     status("p10_post", "Phase 10: Post-Connection Attacks", "running")
 
     if not ap_iface:
@@ -4849,7 +4916,7 @@ def phase_post_connection(ap_iface: str, output_dir: Path,
                 procs.extend([p1, p2])
                 arp_results["targets"].append(target_ip)
             arp_results["tool"] = "arpspoof"
-            time.sleep(min(duration // 2, 60))
+            _pause_sleep(min(duration // 2, 60))
             for p in procs:
                 _kill_proc(p)
         elif bettercap and clients:
@@ -4907,7 +4974,7 @@ def phase_post_connection(ap_iface: str, output_dir: Path,
             try:
                 with open(resp_log, "w") as rlog:
                     proc = subprocess.Popen(cmd, stdout=rlog, stderr=rlog)
-                time.sleep(min(duration, 90))
+                _pause_sleep(min(duration, 90))
                 _kill_proc(proc)
                 raw = resp_log.read_text(encoding="utf-8", errors="replace")
                 hashes = re.findall(
@@ -5001,6 +5068,7 @@ def phase_legacy_attacks(monitor_iface: str, target_aps: list,
     (e.g. wlan0) used to source captive portal bypass test traffic.  When
     empty or unavailable, captive portal tests skip with a clear log
     rather than emitting false positives via whatever route the OS picks."""
+    _check_pause()
     status("p11_legacy", "Phase 11: Legacy / Niche Attacks", "running")
     aps    = target_aps or enriched_aps
     lg_dir = output_dir / "legacy_attacks"
@@ -5852,6 +5920,7 @@ def phase_contextual_intel(enriched_aps: list, output_dir: Path) -> None:
 
     This is the 'capture everything' phase — distinct from action phases.
     Emits no risk-graded findings; all output is Informational severity."""
+    _check_pause()
     status("p_ctx", "Phase 0-II: Contextual Intelligence", "running")
     ctx_dir = output_dir / "contextual_intel"
     ctx_dir.mkdir(exist_ok=True)
@@ -5963,6 +6032,7 @@ def phase_contextual_intel(enriched_aps: list, output_dir: Path) -> None:
 def phase_meraki_recon(enriched_aps: list, output_dir: Path) -> None:
     """Identify Meraki APs, classify product line by vendor IE, attempt
     firmware fingerprinting, detect shared-BSSID multi-SSID deployments."""
+    _check_pause()
     status("p_meraki", "Phase 0-III: Meraki Infrastructure Reconnaissance", "running")
     meraki_dir = output_dir / "meraki_recon"
     meraki_dir.mkdir(exist_ok=True)
@@ -6050,6 +6120,7 @@ def phase_server_cert_analysis(target_aps: list, output_dir: Path,
 
     Looks for existing pcap files in subdirectories of output_dir (deauth-
     handshake capture, wifite capture, etc.). Emits per-cert findings."""
+    _check_pause()
     status("p_cert", "Phase 0-IV: EAP-TLS Server Certificate Analysis", "running")
     cert_dir = output_dir / "cert_analysis"
     cert_dir.mkdir(exist_ok=True)
@@ -6270,6 +6341,7 @@ def phase_ipsk_test(monitor_iface: str, primary_iface: str,
     """Detect Meraki iPSK SSIDs (WPA2-PSK with per-MAC PSK assignment) by
     observing PMKID-per-client variance, then test MAC-spoofing inheritance
     when an iPSK is suspected and a known iPSK-issued MAC is observable."""
+    _check_pause()
     status("p_ipsk", "Phase 0-V: Meraki iPSK Test", "running")
     ipsk_dir = output_dir / "ipsk_test"
     ipsk_dir.mkdir(exist_ok=True)
@@ -6382,6 +6454,7 @@ def phase_captive_portal_test(target_aps: list, output_dir: Path,
     Requires the test host to actually associate to an open guest SSID for
     full coverage; in monitor-mode-only operation only the passive disclosure
     findings are emitted."""
+    _check_pause()
     status("p_splash", "Phase 0-VI: Captive Portal / Splash Bypass Testing", "running")
     splash_dir = output_dir / "captive_portal"
     splash_dir.mkdir(exist_ok=True)
@@ -6565,6 +6638,7 @@ def phase_eaptls_identity_analysis(output_dir: Path, timeout: int = 30) -> None:
     bleeding into the eap.identity field).  Rejected identities are
     logged to eap_identities_rejected.json so the operator can audit
     false-positive filtering if a legitimate identity is suppressed."""
+    _check_pause()
     status("p_eaptls_id", "Phase 0-VII: EAP-TLS Identity Disclosure Analysis",
            "running")
     id_dir = output_dir / "eap_identity"
@@ -6724,7 +6798,7 @@ def main():
     global _PAUSE
     if _pp is not None:
         _PAUSE = _pp.PauseManager(args.project, "aether")
-        _PAUSE.start_watcher(grace_period=60)
+        _PAUSE.start_watcher(checkpoint_callback=lambda: _save_checkpoint(args.project), grace_period=30)
         _resumed = os.environ.get("CRUCIBLE_RESUME") == "1"
         _PAUSE.log_run_type(resumed=_resumed)
         if _resumed:
