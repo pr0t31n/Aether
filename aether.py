@@ -11,7 +11,7 @@ Orchestrates multi-phase wireless assessments via:
   Phase 4   — WPA3 SAE resource exhaustion              (dragondrain)
   Phase 5   — WPA2 KRACK key reinstallation testing     (krackattacks-scripts)
 
-Protocol tokens (emitted to stdout for Spectre frontend):
+Protocol tokens (emitted to stdout for Crucible frontend):
   __SPECTRE_LOG__    <message>
   __SPECTRE_ERR__    <message>
   __SPECTRE_STATUS__ <json>
@@ -192,7 +192,7 @@ def _load_catalogue() -> None:
 _findings_collected: list[dict] = []
 
 # ── Output protocol ───────────────────────────────────────────────────────────
-_MANAGED = os.environ.get("SPECTRE_MANAGED", "") == "1"
+_MANAGED = os.environ.get("CRUCIBLE_MANAGED", "") == "1"
 _log_fh = None  # opened in main() once the project dir is known
 
 # §13b/§14j/§14k: canonical run-dir audit log (scan.log + scan.log.json + errors.log),
@@ -237,14 +237,14 @@ def _save_checkpoint(project_dir):
 
 def _tok(token: str, msg: str) -> None:
     if _MANAGED:
-        print(f"{token} {msg}", flush=True)
+        print(f"{token}:{msg}", flush=True)
     else:
         ts = datetime.now().strftime("%H:%M:%S")
-        if token == "__SPECTRE_LOG__":
+        if token == "__CRUCIBLE_LOG__":
             print(f"[{ts}] [*] {msg}", flush=True)
-        elif token == "__SPECTRE_ERR__":
+        elif token == "__CRUCIBLE_ERR__":
             print(f"[{ts}] [!] {msg}", flush=True)
-        elif token == "__SPECTRE_STATUS__":
+        elif token == "__CRUCIBLE_STATUS__":
             try:
                 d = json.loads(msg)
                 step = f" — {d['step']}" if d.get("step") else ""
@@ -252,7 +252,7 @@ def _tok(token: str, msg: str) -> None:
                       f"{d.get('label', d.get('phase','?'))}{step}", flush=True)
             except Exception:
                 print(f"[{ts}] [STATUS] {msg}", flush=True)
-        elif token == "__SPECTRE_FINDING__":
+        elif token == "__CRUCIBLE_FINDING__":
             try:
                 d = json.loads(msg)
                 print(f"[{ts}] [+] FINDING: [{d.get('severity','?')}] "
@@ -263,11 +263,11 @@ def _tok(token: str, msg: str) -> None:
             print(f"[{ts}] {msg}", flush=True)
     if _log_fh is not None:
         ts = datetime.now().strftime("%H:%M:%S")
-        if token == "__SPECTRE_LOG__":
+        if token == "__CRUCIBLE_LOG__":
             _log_fh.write(f"[{ts}] {msg}\n")
-        elif token == "__SPECTRE_ERR__":
+        elif token == "__CRUCIBLE_ERR__":
             _log_fh.write(f"[{ts}] [!] {msg}\n")
-        elif token == "__SPECTRE_STATUS__":
+        elif token == "__CRUCIBLE_STATUS__":
             try:
                 d = json.loads(msg)
                 step = f" — {d['step']}" if d.get("step") else ""
@@ -279,11 +279,11 @@ def _tok(token: str, msg: str) -> None:
     # §13b/§14j: mirror to the canonical run-dir audit log with a timestamp.
     if _RUNLOG is not None:
         try:
-            if token == "__SPECTRE_LOG__":
+            if token == "__CRUCIBLE_LOG__":
                 _RUNLOG.info(msg)
-            elif token == "__SPECTRE_ERR__":
+            elif token == "__CRUCIBLE_ERR__":
                 _RUNLOG.error(msg)
-            elif token == "__SPECTRE_STATUS__":
+            elif token == "__CRUCIBLE_STATUS__":
                 d = json.loads(msg)
                 step = f" — {d['step']}" if d.get("step") else ""
                 _RUNLOG.event(f"phase {d.get('phase','?')}: {d.get('status','?')}{step}")
@@ -291,12 +291,12 @@ def _tok(token: str, msg: str) -> None:
             pass
 
 
-def log(msg: str)    -> None: _tok("__SPECTRE_LOG__",     msg)
-def err(msg: str)    -> None: _tok("__SPECTRE_ERR__",     msg)
+def log(msg: str)    -> None: _tok("__CRUCIBLE_LOG__",     msg)
+def err(msg: str)    -> None: _tok("__CRUCIBLE_ERR__",     msg)
 
 
 def status(phase: str, label: str, state: str, step: str = "") -> None:
-    _tok("__SPECTRE_STATUS__", json.dumps({
+    _tok("__CRUCIBLE_STATUS__", json.dumps({
         "phase": phase, "label": label, "status": state, "step": step,
         "ts": datetime.now().isoformat(),
     }))
@@ -352,7 +352,7 @@ def finding(title: str, severity: str, description: str,
         rec["cvss_score"]  = cvss_score
         rec["cvss_vector"] = cvss_vector
     _findings_collected.append(rec)
-    _tok("__SPECTRE_FINDING__", json.dumps(rec))
+    _tok("__CRUCIBLE_FINDING__", json.dumps(rec))
 
 
 def finding_from_cat(cat_id: str, data: dict | None = None,
@@ -6857,7 +6857,7 @@ def main():
         _cs = (config.get("client_short") or "").strip()
         _sd = (config.get("start_date") or "").strip()
         # Use tool-specific name from TOOLS registry if this is a variant (aether-z, etc.)
-        _tool_key = os.environ.get("SPECTRE_TOOL_ID", "aether")
+        _tool_key = os.environ.get("CRUCIBLE_TOOL_ID", "aether")
         args.project = str(_build_project_dir(_cs, _sd, _tool_key))
     # Announce the resolved project dir so the operator can see exactly where
     # this run is writing — quiet defaults to a wrong slug were the symptom that
@@ -6865,7 +6865,7 @@ def main():
     print(f"[Aether v{VERSION}] Project directory: {args.project}", flush=True)
     _write_project_meta(
         Path(args.project),
-        tool=os.environ.get("SPECTRE_TOOL_ID", "aether"),
+        tool=os.environ.get("CRUCIBLE_TOOL_ID", "aether"),
         client_name=(config.get("client_name") or ""),
         client_short=(config.get("client_short") or ""),
         year=((config.get("start_date") or "")[:4] or datetime.now().strftime("%Y")),
