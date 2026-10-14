@@ -6881,6 +6881,15 @@ def main():
         target=(config.get("ssid") or config.get("interface") or
                 str(config.get("targets") or "")),
     )
+    try:
+        import pr0t31n_dep_snapshot as _ds
+        _ds.write_snapshot(
+            Path(args.project), "aether", VERSION,
+            binaries=["aircrack-ng", "airodump-ng", "aireplay-ng", "airmon-ng", "reaver", "wash", "hcxdumptool", "hcxpcapngtool", "hashcat", "asleap", "wifite", "hostapd", "dnsmasq", "nmap", "mdk4", "responder", "bettercap"],
+            pip_packages=[],
+        )
+    except Exception:
+        pass
 
     global _log_fh, _RUNLOG
     try:
