@@ -78,6 +78,25 @@ def detect_os() -> str:
             return "ubuntu"
     return "unknown"
 
+
+def _read_os_release() -> dict:
+    d = {}
+    try:
+        with open("/etc/os-release") as f:
+            for line in f:
+                line = line.strip()
+                if "=" not in line: continue
+                k, _, v = line.partition("=")
+                d[k.lower()] = v.strip('"').strip("'")
+    except FileNotFoundError:
+        pass
+    return d
+
+_OS_RELEASE = _read_os_release()
+
+def is_kali() -> bool:
+    return "kali" in _OS_RELEASE.get("id", "").lower()
+
 # ---------------------------------------------------------------------------
 # Command runner
 # ---------------------------------------------------------------------------
@@ -125,16 +144,8 @@ def require_root() -> None:
 APT_PACKAGES = [
     # aircrack-ng suite (airmon-ng, airodump-ng, aireplay-ng, aircrack-ng)
     "aircrack-ng",
-    # WPS tools (wash ships with reaver)
-    "reaver",
-    # PMKID capture
-    "hcxdumptool",
-    # hcxpcapngtool and hcxpcaptool
-    "hcxtools",
     # GPU/CPU hash cracking
     "hashcat",
-    # LEAP/EAP-MD5 cracking
-    "asleap",
     # wireless config / monitor mode helpers
     "iw", "wireless-tools", "iproute2", "net-tools",
     # build tools (needed for dragondrain-and-time C compilation)
@@ -143,20 +154,12 @@ APT_PACKAGES = [
     "python3-scapy",
     # hostapd base (eaphammer builds hostapd-wpe on top of this)
     "hostapd",
-    # hostapd-mana for KARMA/MANA attacks (Phase 6b)
-    "hostapd-mana",
     # DHCP server for rogue AP / post-connection phases
     "dnsmasq",
     # Port scanning for post-connection discovery (Phase 10)
     "nmap",
     # ARP spoofing for post-connection MITM; dsniff provides arpspoof (Phase 10)
     "dsniff",
-    # Deauth / beacon flooding / client confusion (Phase 7)
-    "mdk4",
-    # LLMNR/NBT-NS/MDNS poisoning for credential capture (Phase 10)
-    "responder",
-    # bettercap for KARMA fallback + ARP/MITM (Phase 6b / 10)
-    "bettercap",
     # nl80211 libs for dragonslayer
     "libnl-3-dev", "libnl-genl-3-dev",
     # build deps for C tools
@@ -171,6 +174,18 @@ APT_PACKAGES = [
     "dnsutils",
     # HTTP client for captive portal / connectivity checks
     "curl",
+]
+
+# Kali-only packages — available in Kali repos but not standard Ubuntu/Debian
+APT_PACKAGES_KALI = [
+    "reaver",        # WPS tools (wash ships with reaver)
+    "hcxdumptool",   # PMKID capture
+    "hcxtools",      # hcxpcapngtool and hcxpcaptool
+    "asleap",        # LEAP/EAP-MD5 cracking
+    "hostapd-mana",  # KARMA/MANA attacks (Phase 6b)
+    "mdk4",          # Deauth / beacon flooding / client confusion (Phase 7)
+    "responder",     # LLMNR/NBT-NS/MDNS poisoning for credential capture (Phase 10)
+    "bettercap",     # KARMA fallback + ARP/MITM (Phase 6b / 10)
 ]
 
 DNF_PACKAGES = [
@@ -190,12 +205,34 @@ ZYPPER_PACKAGES = [
 
 BREW_PACKAGES = ["aircrack-ng", "hashcat"]
 
+_apt_updated = False
+
+
+def apt_install_optional(packages):
+    global _apt_updated
+    if not _apt_updated:
+        info("Running apt-get update ...")
+        run(["apt-get", "update", "-y"])
+        _apt_updated = True
+    for pkg in packages:
+        if _dpkg_installed(pkg):
+            info(f"  ✓ {pkg} already installed")
+            continue
+        r = subprocess.run(["apt-get", "install", "-y", pkg],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        if r.returncode == 0:
+            info(f"  ✓ {pkg} installed")
+        else:
+            warn(f"  {pkg} not available — skipping (install manually if needed)")
+
 
 def phase_apt(dry_run: bool) -> None:
+    global _apt_updated
     phase_header("PHASE 1 — System Packages (apt)")
     require_root()
     info("Updating package lists…")
     run(["apt-get", "update", "-y"], check=True, dry_run=dry_run)
+    _apt_updated = True
     info("Upgrading installed packages…")
     run(["apt-get", "upgrade", "-y"], check=True, dry_run=dry_run)
     info(f"Installing: {' '.join(APT_PACKAGES)}")
@@ -205,6 +242,13 @@ def phase_apt(dry_run: bool) -> None:
         info(f"  {_skip} APT package(s) already installed")
     if _needed:
         run(["apt-get", "install", "-y"] + _needed, check=True, dry_run=dry_run)
+    # Kali-only wireless packages
+    if is_kali():
+        info("Installing Kali-specific wireless packages…")
+        apt_install_optional(APT_PACKAGES_KALI)
+    else:
+        warn("Hardware-specific packages (reaver, hcxdumptool, mdk4, bettercap, etc.) are only available in Kali repos.")
+        note("On other distros, install from source or see tool documentation.")
 
 
 def phase_dnf(dry_run: bool) -> None:
