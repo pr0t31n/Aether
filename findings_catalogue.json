@@ -8,7 +8,7 @@
   "findings": [
     {
       "id": "AETHER-001",
-      "title": "WPA Pre-Shared Key Cracked",
+      "title": "Wireless Vulnerability: WPA Pre-Shared Key Cracked",
       "aliases": [],
       "source_tools": [
         "aether"
@@ -50,7 +50,7 @@
     },
     {
       "id": "AETHER-002",
-      "title": "WPA Handshake Captured",
+      "title": "Wireless Vulnerability: WPA Handshake Captured",
       "aliases": [],
       "source_tools": [
         "aether"
@@ -92,7 +92,7 @@
     },
     {
       "id": "AETHER-003",
-      "title": "WPA-Enterprise Credentials Captured",
+      "title": "Wireless Vulnerability: WPA-Enterprise Credentials Captured",
       "aliases": [],
       "source_tools": [
         "aether"
@@ -134,7 +134,7 @@
     },
     {
       "id": "AETHER-004",
-      "title": "WPA3 SAE Dragonblood — Invalid Curve Attack Confirmed",
+      "title": "Wireless Vulnerability: WPA3 SAE Dragonblood — Invalid Curve Attack Confirmed",
       "aliases": [],
       "source_tools": [
         "aether"
@@ -182,7 +182,7 @@
     },
     {
       "id": "AETHER-005",
-      "title": "WPA3 SAE Dragonblood — Reflection Attack Confirmed",
+      "title": "Wireless Vulnerability: WPA3 SAE Dragonblood — Reflection Attack Confirmed",
       "aliases": [],
       "source_tools": [
         "aether"
@@ -228,7 +228,7 @@
     },
     {
       "id": "AETHER-006",
-      "title": "WPA3 SAE Dragonblood — Secondary Invalid Curve Attack Confirmed",
+      "title": "Wireless Vulnerability: WPA3 SAE Dragonblood — Secondary Invalid Curve Attack Confirmed",
       "aliases": [],
       "source_tools": [
         "aether"
@@ -280,7 +280,7 @@
     },
     {
       "id": "AETHER-007",
-      "title": "WPA3 SAE Dragonblood — Zero-Scalar Attack Confirmed",
+      "title": "Wireless Vulnerability: WPA3 SAE Dragonblood — Zero-Scalar Attack Confirmed",
       "aliases": [],
       "source_tools": [
         "aether"
@@ -330,7 +330,7 @@
     },
     {
       "id": "AETHER-008",
-      "title": "WPA3 SAE Resource Exhaustion (Dragondrain) Tested",
+      "title": "Wireless Vulnerability: WPA3 SAE Resource Exhaustion (Dragondrain) Tested",
       "aliases": [],
       "source_tools": [
         "aether"
@@ -376,7 +376,7 @@
     },
     {
       "id": "AETHER-009",
-      "title": "WPA2 KRACK Vulnerability — Standard 4-Way Handshake Reinstallation",
+      "title": "Wireless Vulnerability: WPA2 KRACK Vulnerability — Standard 4-Way Handshake Reinstallation",
       "aliases": [],
       "source_tools": [
         "aether"
@@ -424,7 +424,7 @@
     },
     {
       "id": "AETHER-010",
-      "title": "WPA2 KRACK Vulnerability — TPTK Variant",
+      "title": "Wireless Vulnerability: WPA2 KRACK Vulnerability — TPTK Variant",
       "aliases": [],
       "source_tools": [
         "aether"
@@ -472,7 +472,7 @@
     },
     {
       "id": "AETHER-011",
-      "title": "WPA2 KRACK Vulnerability — Group Key Reinstallation",
+      "title": "Wireless Vulnerability: WPA2 KRACK Vulnerability — Group Key Reinstallation",
       "aliases": [],
       "source_tools": [
         "aether"
@@ -520,7 +520,7 @@
     },
     {
       "id": "AETHER-012",
-      "title": "WEP Encryption in Use",
+      "title": "Wireless Vulnerability: WEP Encryption in Use",
       "aliases": [],
       "source_tools": [
         "aether"
@@ -570,7 +570,7 @@
     },
     {
       "id": "AETHER-013",
-      "title": "WEP Key Cracked",
+      "title": "Wireless Vulnerability: WEP Key Cracked",
       "aliases": [],
       "source_tools": [
         "aether"
@@ -618,7 +618,7 @@
     },
     {
       "id": "AETHER-014",
-      "title": "Open / Unencrypted Wireless Network",
+      "title": "Wireless Misconfiguration: Open / Unencrypted Wireless Network",
       "aliases": [],
       "source_tools": [
         "aether"
@@ -660,7 +660,7 @@
     },
     {
       "id": "AETHER-015",
-      "title": "WPS Enabled on Access Point",
+      "title": "Wireless Vulnerability: WPS Enabled on Access Point",
       "aliases": [],
       "source_tools": [
         "aether"
@@ -708,7 +708,7 @@
     },
     {
       "id": "AETHER-016",
-      "title": "WPA3 Transition Mode — Downgrade Attack Surface",
+      "title": "Wireless Vulnerability: WPA3 Transition Mode — Downgrade Attack Surface",
       "aliases": [],
       "source_tools": [
         "aether"
@@ -754,7 +754,7 @@
     },
     {
       "id": "AETHER-017",
-      "title": "WPA PMKID / EAPOL Hash Captured",
+      "title": "Wireless Vulnerability: WPA PMKID / EAPOL Hash Captured",
       "aliases": [],
       "source_tools": [
         "aether"
@@ -800,7 +800,7 @@
     },
     {
       "id": "AETHER-018",
-      "title": "MSCHAPv2 Hash Cracked via asleap",
+      "title": "Wireless Vulnerability: MSCHAPv2 Hash Cracked via asleap",
       "aliases": [],
       "source_tools": [
         "aether"
@@ -846,7 +846,7 @@
     },
     {
       "id": "AETHER-019",
-      "title": "Rogue AP — Clients Associated to Evil Twin",
+      "title": "Wireless Vulnerability: Rogue AP — Clients Associated to Evil Twin",
       "aliases": [],
       "source_tools": [
         "aether"
@@ -889,7 +889,7 @@
     },
     {
       "id": "AETHER-020",
-      "title": "Rogue AP — WPA Pre-Shared Key Phished via Captive Portal",
+      "title": "Wireless Vulnerability: Rogue AP — WPA Pre-Shared Key Phished via Captive Portal",
       "aliases": [],
       "source_tools": [
         "aether"
@@ -932,7 +932,7 @@
     },
     {
       "id": "AETHER-021",
-      "title": "KARMA / MANA Attack — Client Credentials Captured",
+      "title": "Wireless Vulnerability: KARMA / MANA Attack — Client Credentials Captured",
       "aliases": [],
       "source_tools": [
         "aether"
@@ -975,7 +975,7 @@
     },
     {
       "id": "AETHER-022",
-      "title": "Protected Management Frames (PMF / 802.11w) Not Enforced",
+      "title": "Wireless Misconfiguration: Protected Management Frames (PMF / 802.11w) Not Enforced",
       "aliases": [],
       "source_tools": [
         "aether"
@@ -1018,7 +1018,7 @@
     },
     {
       "id": "AETHER-023",
-      "title": "BSS Transition Management (802.11v) Hijack Accepted",
+      "title": "Wireless Vulnerability: BSS Transition Management (802.11v) Hijack Accepted",
       "aliases": [],
       "source_tools": [
         "aether"
@@ -1061,7 +1061,7 @@
     },
     {
       "id": "AETHER-024",
-      "title": "Client Probe Request Harvest — Remembered Network Disclosure",
+      "title": "Wireless Vulnerability: Client Probe Request Harvest — Remembered Network Disclosure",
       "aliases": [],
       "source_tools": [
         "aether"
@@ -1104,7 +1104,7 @@
     },
     {
       "id": "AETHER-025",
-      "title": "EAP Downgrade — Weak EAP Method Credentials Captured",
+      "title": "Wireless Vulnerability: EAP Downgrade — Weak EAP Method Credentials Captured",
       "aliases": [],
       "source_tools": [
         "aether"
@@ -1147,7 +1147,7 @@
     },
     {
       "id": "AETHER-026",
-      "title": "SAE Transition Mode — WPA2 Downgrade Attack Surface",
+      "title": "Wireless Vulnerability: SAE Transition Mode — WPA2 Downgrade Attack Surface",
       "aliases": [],
       "source_tools": [
         "aether"
@@ -1190,7 +1190,7 @@
     },
     {
       "id": "AETHER-027",
-      "title": "ARP Cache Poisoning — MITM Position Established",
+      "title": "Network Misconfiguration: ARP Cache Poisoning — MITM Position Established",
       "aliases": [],
       "source_tools": [
         "aether"
@@ -1233,7 +1233,7 @@
     },
     {
       "id": "AETHER-028",
-      "title": "LLMNR / NBT-NS Poisoning — NTLMv2 Hashes Captured",
+      "title": "Network Misconfiguration: LLMNR / NBT-NS Poisoning — NTLMv2 Hashes Captured",
       "aliases": [],
       "source_tools": [
         "aether"
@@ -1319,7 +1319,7 @@
     },
     {
       "id": "AETHER-030",
-      "title": "TKIP Encryption in Use",
+      "title": "Wireless Vulnerability: TKIP Encryption in Use",
       "aliases": [],
       "source_tools": [
         "aether"
@@ -1362,7 +1362,7 @@
     },
     {
       "id": "AETHER-031",
-      "title": "TKIP ChopChop / Fragmentation Attack — Packet Decryption Confirmed",
+      "title": "Wireless Vulnerability: TKIP ChopChop / Fragmentation Attack — Packet Decryption Confirmed",
       "aliases": [],
       "source_tools": [
         "aether"
@@ -1405,7 +1405,7 @@
     },
     {
       "id": "AETHER-032",
-      "title": "Wi-Fi Direct / P2P Device Discovered",
+      "title": "Discovery: Wi-Fi Direct / P2P Device Discovered",
       "aliases": [],
       "source_tools": [
         "aether"
@@ -1448,7 +1448,7 @@
     },
     {
       "id": "AETHER-033",
-      "title": "Wi-Fi Direct WPS PIN Cracked — Device Compromised",
+      "title": "Wireless Vulnerability: Wi-Fi Direct WPS PIN Cracked — Device Compromised",
       "aliases": [],
       "source_tools": [
         "aether"
@@ -1879,7 +1879,7 @@
     },
     {
       "id": "AETHER-034",
-      "title": "Captive Portal Bypass Confirmed",
+      "title": "Captive Portal: Captive Portal Bypass Confirmed",
       "aliases": [],
       "source_tools": [
         "aether"
@@ -1922,7 +1922,7 @@
     },
     {
       "id": "AE-001",
-      "title": "Multiple APs Broadcasting SSID: {ssid_label}",
+      "title": "Wireless Misconfiguration: Multiple APs Broadcasting SSID: {ssid_label}",
       "aliases": [],
       "source_tools": [
         "aether"
@@ -1961,7 +1961,7 @@
     },
     {
       "id": "AE-002",
-      "title": "WPA Handshake / PMKID Captured: {ssid}",
+      "title": "Wireless Vulnerability: WPA Handshake / PMKID Captured: {ssid}",
       "aliases": [],
       "source_tools": [
         "aether"
@@ -2000,7 +2000,7 @@
     },
     {
       "id": "AE-003",
-      "title": "WPA Pre-Shared Key Cracked via Deauth: {ssid}",
+      "title": "Wireless Vulnerability: WPA Pre-Shared Key Cracked via Deauth: {ssid}",
       "aliases": [],
       "source_tools": [
         "aether"
@@ -2039,7 +2039,7 @@
     },
     {
       "id": "AE-004",
-      "title": "WPA Pre-Shared Key Cracked: {ssid}",
+      "title": "Wireless Vulnerability: WPA Pre-Shared Key Cracked: {ssid}",
       "aliases": [],
       "source_tools": [
         "aether"
@@ -2078,7 +2078,7 @@
     },
     {
       "id": "AE-005",
-      "title": "WPS PIN / Pixie Dust Succeeded: {ssid}",
+      "title": "Wireless Vulnerability: WPS PIN / Pixie Dust Succeeded: {ssid}",
       "aliases": [],
       "source_tools": [
         "aether"
@@ -2117,7 +2117,7 @@
     },
     {
       "id": "AETHER-CERT-001",
-      "title": "Weak Server Certificate Algorithm or Key Length",
+      "title": "Wireless Certificate: Weak Server Certificate Algorithm or Key Length",
       "aliases": [],
       "source_tools": [
         "aether"
@@ -2161,7 +2161,7 @@
     },
     {
       "id": "AETHER-CERT-002",
-      "title": "Server Certificate Expired or Expiring Soon",
+      "title": "Wireless Certificate: Server Certificate Expired or Expiring Soon",
       "aliases": [],
       "source_tools": [
         "aether"
@@ -2202,7 +2202,7 @@
     },
     {
       "id": "AETHER-CERT-003",
-      "title": "Server Certificate Self-Signed or From Unrecognised CA",
+      "title": "Wireless Certificate: Server Certificate Self-Signed or From Unrecognised CA",
       "aliases": [],
       "source_tools": [
         "aether"
@@ -2243,7 +2243,7 @@
     },
     {
       "id": "AETHER-CERT-004",
-      "title": "Server Certificate Issuer Reveals Internal CA Infrastructure",
+      "title": "Wireless Certificate: Server Certificate Issuer Reveals Internal CA Infrastructure",
       "aliases": [],
       "source_tools": [
         "aether"
@@ -2284,7 +2284,7 @@
     },
     {
       "id": "AETHER-CERT-005",
-      "title": "Server Cert SAN Reveals Internal RADIUS Hostnames",
+      "title": "Wireless Certificate: Server Cert SAN Reveals Internal RADIUS Hostnames",
       "aliases": [],
       "source_tools": [
         "aether"
@@ -2325,7 +2325,7 @@
     },
     {
       "id": "AETHER-CERT-006",
-      "title": "Server Certificate Uses Strong Modern Algorithm (Positive)",
+      "title": "Wireless Certificate: Server Certificate Uses Strong Modern Algorithm (Positive)",
       "aliases": [],
       "source_tools": [
         "aether"
@@ -2364,7 +2364,7 @@
     },
     {
       "id": "AETHER-INFO-CERT-CAPTURED",
-      "title": "Server Certificate Captured From EAP Exchange",
+      "title": "Wireless Certificate: Server Certificate Captured From EAP Exchange",
       "aliases": [],
       "source_tools": [
         "aether"
@@ -2403,7 +2403,7 @@
     },
     {
       "id": "AETHER-EAPTLS-001",
-      "title": "EAP Outer Identity Leaks User-Realm Format",
+      "title": "Wireless Misconfiguration: EAP Outer Identity Leaks User-Realm Format",
       "aliases": [],
       "source_tools": [
         "aether"
@@ -2445,7 +2445,7 @@
     },
     {
       "id": "AETHER-EAPTLS-002",
-      "title": "Client Supplicant Fails to Validate Server Certificate (Evil Twin Succeeds Against EAP-TLS)",
+      "title": "Wireless Certificate: Client Supplicant Fails to Validate Server Certificate (Evil Twin Succeeds Against EAP-TLS)",
       "aliases": [],
       "source_tools": [
         "aether"
@@ -2489,7 +2489,7 @@
     },
     {
       "id": "AETHER-EAPTLS-003",
-      "title": "Client Supplicant Attempts Authentication Against Rogue AP",
+      "title": "Authentication: Client Supplicant Attempts Authentication Against Rogue AP",
       "aliases": [],
       "source_tools": [
         "aether"
@@ -2528,7 +2528,7 @@
     },
     {
       "id": "AETHER-MERAKI-001",
-      "title": "Meraki Infrastructure Identified",
+      "title": "Discovery: Meraki Infrastructure Identified",
       "aliases": [],
       "source_tools": [
         "aether"
@@ -2606,7 +2606,7 @@
     },
     {
       "id": "AETHER-MERAKI-003",
-      "title": "Multiple SSIDs On Shared Physical AP",
+      "title": "Wireless Misconfiguration: Multiple SSIDs On Shared Physical AP",
       "aliases": [],
       "source_tools": [
         "aether"
@@ -2645,7 +2645,7 @@
     },
     {
       "id": "AETHER-MERAKI-004",
-      "title": "Meraki Systems Manager Domain Referenced in Client Traffic",
+      "title": "Discovery: Meraki Systems Manager Domain Referenced in Client Traffic",
       "aliases": [],
       "source_tools": [
         "aether"
@@ -2684,7 +2684,7 @@
     },
     {
       "id": "AETHER-IPSK-001",
-      "title": "iPSK MAC-Inheritance Test Succeeded",
+      "title": "Wireless Misconfiguration: iPSK MAC-Inheritance Test Succeeded",
       "aliases": [],
       "source_tools": [
         "aether"
@@ -2728,7 +2728,7 @@
     },
     {
       "id": "AETHER-IPSK-002",
-      "title": "iPSK Suspected — Per-Client PMKID Variance Observed",
+      "title": "Wireless Misconfiguration: iPSK Suspected — Per-Client PMKID Variance Observed",
       "aliases": [],
       "source_tools": [
         "aether"
@@ -2767,7 +2767,7 @@
     },
     {
       "id": "AETHER-IPSK-003",
-      "title": "iPSK SSID Deployed Alongside Cert-Auth SSID on Same Physical AP",
+      "title": "Wireless Misconfiguration: iPSK SSID Deployed Alongside Cert-Auth SSID on Same Physical AP",
       "aliases": [],
       "source_tools": [
         "aether"
@@ -2806,7 +2806,7 @@
     },
     {
       "id": "AETHER-SPLASH-001",
-      "title": "Captive Portal Session Bound To MAC Alone",
+      "title": "Captive Portal: Captive Portal Session Bound To MAC Alone",
       "aliases": [],
       "source_tools": [
         "aether"
@@ -2845,7 +2845,7 @@
     },
     {
       "id": "AETHER-SPLASH-002",
-      "title": "Captive Portal DNS Bypass — External Resolution Pre-Auth",
+      "title": "Captive Portal: Captive Portal DNS Bypass — External Resolution Pre-Auth",
       "aliases": [],
       "source_tools": [
         "aether"
@@ -2888,7 +2888,7 @@
     },
     {
       "id": "AETHER-SPLASH-003",
-      "title": "Captive Portal ICMP Bypass — External Echo Pre-Auth",
+      "title": "Captive Portal: Captive Portal ICMP Bypass — External Echo Pre-Auth",
       "aliases": [],
       "source_tools": [
         "aether"
@@ -2927,7 +2927,7 @@
     },
     {
       "id": "AETHER-SPLASH-004",
-      "title": "Captive Portal Reveals AP / Vendor Information",
+      "title": "Captive Portal: Captive Portal Reveals AP / Vendor Information",
       "aliases": [],
       "source_tools": [
         "aether"
@@ -2966,7 +2966,7 @@
     },
     {
       "id": "AETHER-INFO-AP",
-      "title": "AP Observed and Cataloged",
+      "title": "Discovery: AP Observed and Cataloged",
       "aliases": [],
       "source_tools": [
         "aether"
@@ -3005,7 +3005,7 @@
     },
     {
       "id": "AETHER-INFO-CLIENT",
-      "title": "Client Device Observed and Cataloged",
+      "title": "Discovery: Client Device Observed and Cataloged",
       "aliases": [],
       "source_tools": [
         "aether"
@@ -3083,7 +3083,7 @@
     },
     {
       "id": "AETHER-INFO-AUTH-TYPE",
-      "title": "Authentication Type Classified",
+      "title": "Discovery: Authentication Type Classified",
       "aliases": [],
       "source_tools": [
         "aether"
@@ -3122,7 +3122,7 @@
     },
     {
       "id": "AETHER-INFO-CHANNEL",
-      "title": "Channel Allocation Observed",
+      "title": "Discovery: Channel Allocation Observed",
       "aliases": [],
       "source_tools": [
         "aether"
@@ -3161,7 +3161,7 @@
     },
     {
       "id": "AETHER-INFO-PROBE",
-      "title": "Client Probe Request Observed",
+      "title": "Discovery: Client Probe Request Observed",
       "aliases": [],
       "source_tools": [
         "aether"
@@ -3200,7 +3200,7 @@
     },
     {
       "id": "AETHER-INFO-MIXED-AUTH",
-      "title": "Inconsistent Authentication Modes Across APs for Same SSID",
+      "title": "Authentication: Inconsistent Authentication Modes Across APs for Same SSID",
       "aliases": [
         "SSID Broadcast With Weaker Auth on Subset of APs",
         "Wireless Authentication Downgrade Opportunity"
@@ -3281,7 +3281,7 @@
     },
     {
       "id": "AETHER-INFO-EAP-IDENTITY",
-      "title": "EAP Outer Identity Observed",
+      "title": "Discovery: EAP Outer Identity Observed",
       "aliases": [],
       "source_tools": [
         "aether"

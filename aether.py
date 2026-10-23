@@ -2376,7 +2376,7 @@ def phase_wireless_intel(
     ssid_label = target_ssids[0] if target_ssids else filtered[0]["ssid"]
     if len(filtered) > 1:
         finding(
-            title=f"Multiple APs Broadcasting SSID: {ssid_label}",
+            title=f"Wireless Misconfiguration: Multiple APs Broadcasting SSID: {ssid_label}",
             severity="INFO",
             description=(
                 f"{len(filtered)} access points are broadcasting '{ssid_label}'. "
@@ -2562,7 +2562,7 @@ def phase_deauth_handshake(
                 psk = m_key.group(1)
                 log(f"[1c] KEY FOUND for {ssid!r}: {psk}")
                 finding(
-                    title=f"WPA Pre-Shared Key Cracked via Deauth: {ssid}",
+                    title=f"Wireless Vulnerability: WPA Pre-Shared Key Cracked via Deauth: {ssid}",
                     severity="CRITICAL",
                     description=(
                         f"Deauthentication attack on '{ssid}' [{bssid}] forced "
@@ -2948,7 +2948,7 @@ def phase_wifite(
             )
             if m:
                 psk   = m.group(1)
-                title = f"WPA Pre-Shared Key Cracked: {ssid}"
+                title = f"Wireless Vulnerability: WPA Pre-Shared Key Cracked: {ssid}"
                 if title not in seen:
                     seen.add(title)
                     finding_from_cat(
@@ -2962,7 +2962,7 @@ def phase_wifite(
                 r'|\[\+\].*(?:handshake|PMKID).*captured)',
                 line, re.I
             ):
-                title = f"WPA Handshake / PMKID Captured: {ssid}"
+                title = f"Wireless Vulnerability: WPA Handshake / PMKID Captured: {ssid}"
                 if title not in seen:
                     seen.add(title)
                     finding_from_cat(
@@ -2972,7 +2972,7 @@ def phase_wifite(
                         title_override=title,
                     )
             if re.search(r'WPS.*?pin|pixie.*?dust|wps.*?cracked', line, re.I):
-                title = f"WPS PIN / Pixie Dust Succeeded: {ssid}"
+                title = f"Wireless Vulnerability: WPS PIN / Pixie Dust Succeeded: {ssid}"
                 if title not in seen:
                     seen.add(title)
                     finding(
