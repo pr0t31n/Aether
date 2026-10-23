@@ -1233,7 +1233,7 @@
     },
     {
       "id": "AETHER-028",
-      "title": "Network Misconfiguration: LLMNR / NBT-NS Poisoning — NTLMv2 Hashes Captured",
+      "title": "Uncategorized: LLMNR / NBT-NS Poisoning — NTLMv2 Hashes Captured",
       "aliases": [],
       "source_tools": [
         "aether"
