@@ -190,6 +190,7 @@ def _load_catalogue() -> None:
 
 # ── In-process findings collector ────────────────────────────────────────────
 _findings_collected: list[dict] = []
+_RUN_DIR: Path | None = None
 
 # ── Output protocol ───────────────────────────────────────────────────────────
 _MANAGED = os.environ.get("CRUCIBLE_MANAGED", "") == "1"
@@ -353,6 +354,7 @@ def finding(title: str, severity: str, description: str,
         rec["cvss_vector"] = cvss_vector
     _findings_collected.append(rec)
     _tok("__CRUCIBLE_FINDING__", json.dumps(rec))
+    _flush_findings()
 
 
 def finding_from_cat(cat_id: str, data: dict | None = None,
@@ -485,6 +487,15 @@ def save_findings(output_dir: Path) -> None:
         f"({len(consolidated)} consolidated; {len(_findings_collected)} raw)")
     # Synthesise universal findings.json + summary.json (schema 1.0) alongside.
     _u_synthesize_outputs(output_dir, consolidated)
+
+
+def _flush_findings():
+    if _RUN_DIR is None:
+        return
+    try:
+        save_findings(_RUN_DIR)
+    except Exception:
+        pass
 
 
 def _u_synthesize_outputs(output_dir: Path, native_findings: list) -> None:
@@ -5460,10 +5471,11 @@ def phase_legacy_attacks(monitor_iface: str, target_aps: list,
 # ── Main orchestrator ─────────────────────────────────────────────────────────
 
 def run(config: dict, project: str) -> None:
-    global _scope_bssids, _scope_ssids
+    global _scope_bssids, _scope_ssids, _RUN_DIR
 
     output_dir = Path(project) / config.get("output_dir", "aether_output")
     output_dir.mkdir(parents=True, exist_ok=True)
+    _RUN_DIR = output_dir
 
     # Generated wordlists (SSID-seeded, domain-derived, website-scraped,
     # multi-source merges) land in <project>/wordlists/ instead of /tmp/
