@@ -191,6 +191,22 @@ def _load_catalogue() -> None:
 # ── In-process findings collector ────────────────────────────────────────────
 _findings_collected: list[dict] = []
 _RUN_DIR: Path | None = None
+_fdb = None
+
+
+def _init_fdb():
+    global _fdb
+    _db_path = os.environ.get("PR0T31N_FINDINGS_DB")
+    if _db_path:
+        try:
+            import sys as _s
+            if "/opt/pr0t31n/shared" not in _s.path:
+                _s.path.insert(0, "/opt/pr0t31n/shared")
+            import pr0t31n_findings_db
+            _fdb = pr0t31n_findings_db.FindingsDB(_db_path)
+        except Exception:
+            pass
+
 
 # ── Output protocol ───────────────────────────────────────────────────────────
 _MANAGED = os.environ.get("CRUCIBLE_MANAGED", "") == "1"
@@ -353,6 +369,11 @@ def finding(title: str, severity: str, description: str,
         rec["cvss_score"]  = cvss_score
         rec["cvss_vector"] = cvss_vector
     _findings_collected.append(rec)
+    if _fdb:
+        try:
+            _fdb.insert_finding(rec)
+        except Exception:
+            pass
     _tok("__CRUCIBLE_FINDING__", json.dumps(rec))
     _flush_findings()
 
@@ -6848,6 +6869,7 @@ def main():
         sys.exit(0)
 
     _startup_tool_check()
+    _init_fdb()
 
     config_path = Path(args.config)
     if not config_path.exists():
