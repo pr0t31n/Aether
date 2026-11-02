@@ -842,6 +842,8 @@ def _readline_timed(stdout, deadline: float) -> bytes | None:
 # Populated from config at startup; empty means "all targets allowed".
 _scope_bssids: set[str] = set()
 _scope_ssids:  set[str] = set()
+_scope_modes: dict[str, str] = {}
+_scope_default_mode: str = "active"
 
 
 # ── Project-scoped wordlist storage ───────────────────────────────────────
@@ -942,6 +944,12 @@ def _in_scope(ap: dict) -> bool:
         log(f"  OUT OF SCOPE — skipping {ssid!r} [{bssid}]")
         return False
     return True
+
+
+def _is_active_scope(ap: dict) -> bool:
+    ssid = ap.get("ssid", "")
+    mode = _scope_modes.get(ssid, _scope_default_mode)
+    return mode == "active"
 
 
 # ── Cross-AP auth-mode consistency detector ──────────────────────────────────
@@ -1088,6 +1096,18 @@ def _dig_iface_args(iface_ip: str) -> list:
 def _ping_iface_args(iface: str) -> list:
     """Return ping args that bind to `iface`, or [] if empty."""
     return ["-I", iface] if iface else []
+
+
+def _get_default_gateway(iface: str) -> str:
+    try:
+        out, rc = _run(["ip", "route", "show", "dev", iface, "default"], timeout=5)
+        if rc == 0 and out.strip():
+            parts = out.strip().split()
+            if "via" in parts:
+                return parts[parts.index("via") + 1]
+    except Exception:
+        pass
+    return ""
 
 
 def _bind_socket_to_iface(sock, iface: str) -> bool:
@@ -5492,7 +5512,7 @@ def phase_legacy_attacks(monitor_iface: str, target_aps: list,
 # ── Main orchestrator ─────────────────────────────────────────────────────────
 
 def run(config: dict, project: str) -> None:
-    global _scope_bssids, _scope_ssids, _RUN_DIR
+    global _scope_bssids, _scope_ssids, _scope_modes, _scope_default_mode, _RUN_DIR
 
     output_dir = Path(project) / config.get("output_dir", "aether_output")
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -5529,6 +5549,12 @@ def run(config: dict, project: str) -> None:
     _scope_ssids  = set(scope_cfg.get("ssids", []))
     if _scope_bssids or _scope_ssids:
         log(f"Scope: {len(_scope_bssids)} BSSID(s), {len(_scope_ssids)} SSID(s) in whitelist")
+    _scope_modes = scope_cfg.get("modes", {})
+    _scope_default_mode = scope_cfg.get("default_mode", "active")
+    if _scope_modes:
+        passive_count = sum(1 for m in _scope_modes.values() if m == "passive")
+        log(f"Scope modes: {len(_scope_modes)} SSID(s) configured "
+            f"({passive_count} passive), default={_scope_default_mode}")
 
     client_name  = config.get("client_name", "")
     client_short = config.get("client_short", "")
@@ -5621,6 +5647,14 @@ def run(config: dict, project: str) -> None:
             timeout=30, channel=scan_channel,
         )
 
+        active_aps = [ap for ap in target_aps if _is_active_scope(ap)]
+        active_enriched = [ap for ap in enriched_aps if _is_active_scope(ap)]
+        passive_only = [ap for ap in target_aps if not _is_active_scope(ap)]
+        if passive_only:
+            passive_ssids = sorted(set(ap.get("ssid", "?") for ap in passive_only))
+            log(f"Passive-scope SSIDs (monitoring only, no client attacks): "
+                f"{', '.join(passive_ssids)}")
+
         if _PAUSE and _PAUSE.check_and_pause(): sys.exit(_pp.EXIT_PAUSED)
 
         if phases_cfg.get("wep", True):
@@ -5653,33 +5687,44 @@ def run(config: dict, project: str) -> None:
         if _PAUSE and _PAUSE.check_and_pause(): sys.exit(_pp.EXIT_PAUSED)
 
         if phases_cfg.get("wpa_handshake", True):
-            log("[orchestrator] Phase 1b (wifite2) — enabled, running WPA/WPS attacks")
-            phase_wifite(
-                active_monitor, target_ssids, effective_bssids,
-                enriched_aps, _effective_wl, output_dir, timeout,
-            )
+            _active_ssids = [s for s in target_ssids
+                             if _scope_modes.get(s, _scope_default_mode) == "active"]
+            if not _active_ssids and target_ssids:
+                log("[orchestrator] Phase 1b (wifite2) — skipped: all target SSIDs are passive scope")
+            else:
+                log("[orchestrator] Phase 1b (wifite2) — enabled, running WPA/WPS attacks")
+                phase_wifite(
+                    active_monitor, _active_ssids or target_ssids, effective_bssids,
+                    active_enriched, _effective_wl, output_dir, timeout,
+                )
 
         if _PAUSE and _PAUSE.check_and_pause(): sys.exit(_pp.EXIT_PAUSED)
 
         if phases_cfg.get("deauth_handshake", True):
-            log("[orchestrator] Phase 1c (Deauth+Handshake) — enabled, targeting APs with clients")
-            phase_deauth_handshake(
-                active_monitor, enriched_aps, output_dir,
-                _effective_wl, timeout, deauth_packets,
-            )
+            if not active_enriched and enriched_aps:
+                log("[orchestrator] Phase 1c (Deauth+Handshake) — skipped: all APs are passive scope")
+            else:
+                log("[orchestrator] Phase 1c (Deauth+Handshake) — enabled, targeting APs with clients")
+                phase_deauth_handshake(
+                    active_monitor, active_enriched, output_dir,
+                    _effective_wl, timeout, deauth_packets,
+                )
 
         if _PAUSE and _PAUSE.check_and_pause(): sys.exit(_pp.EXIT_PAUSED)
 
         if phases_cfg.get("wpa_enterprise", False):
-            log("[orchestrator] Phase 2 (EAPHammer) — enabled, testing WPA-Enterprise")
-            phase_eaphammer(
-                active_monitor, target_aps,
-                tools.get("eaphammer", "/opt/eaphammer/eaphammer"),
-                output_dir,
-                auth=config.get("eaphammer", {}).get("auth", "wpa-eap"),
-                timeout=timeout,
-                asleap_path=asleap_path,
-            )
+            if not active_aps and target_aps:
+                log("[orchestrator] Phase 2 (EAPHammer) — skipped: all APs are passive scope")
+            else:
+                log("[orchestrator] Phase 2 (EAPHammer) — enabled, testing WPA-Enterprise")
+                phase_eaphammer(
+                    active_monitor, active_aps,
+                    tools.get("eaphammer", "/opt/eaphammer/eaphammer"),
+                    output_dir,
+                    auth=config.get("eaphammer", {}).get("auth", "wpa-eap"),
+                    timeout=timeout,
+                    asleap_path=asleap_path,
+                )
 
         if _PAUSE and _PAUSE.check_and_pause(): sys.exit(_pp.EXIT_PAUSED)
 
@@ -5713,74 +5758,98 @@ def run(config: dict, project: str) -> None:
         if _PAUSE and _PAUSE.check_and_pause(): sys.exit(_pp.EXIT_PAUSED)
 
         if phases_cfg.get("rogue_ap", False):
-            log("[orchestrator] Phase 6a (Rogue AP) — enabled, deploying Evil Twin")
-            phase_rogue_ap(
-                active_monitor, interface, target_aps, enriched_aps,
-                output_dir, rogue_cfg, timeout, cracked_psks,
-            )
+            if not active_aps and target_aps:
+                log("[orchestrator] Phase 6a (Rogue AP) — skipped: all APs are passive scope")
+            else:
+                log("[orchestrator] Phase 6a (Rogue AP) — enabled, deploying Evil Twin")
+                phase_rogue_ap(
+                    active_monitor, interface, active_aps, active_enriched,
+                    output_dir, rogue_cfg, timeout, cracked_psks,
+                )
 
         if _PAUSE and _PAUSE.check_and_pause(): sys.exit(_pp.EXIT_PAUSED)
 
         if phases_cfg.get("karma", False):
-            log("[orchestrator] Phase 6b (KARMA) — enabled, running credential harvesting")
-            phase_karma(
-                active_monitor, interface, output_dir, rogue_cfg, timeout,
-            )
+            if _scope_default_mode == "passive" and not active_aps:
+                log("[orchestrator] Phase 6b (KARMA) — skipped: all APs are passive scope")
+            else:
+                log("[orchestrator] Phase 6b (KARMA) — enabled, running credential harvesting")
+                phase_karma(
+                    active_monitor, interface, output_dir, rogue_cfg, timeout,
+                )
 
         if _PAUSE and _PAUSE.check_and_pause(): sys.exit(_pp.EXIT_PAUSED)
 
         if phases_cfg.get("mana_loud", False):
-            log("[orchestrator] Phase 6c (MANA Loud) — enabled, running beacon spam")
-            phase_mana_loud(
-                active_monitor, interface, output_dir, rogue_cfg, timeout,
-            )
+            if _scope_default_mode == "passive" and not active_aps:
+                log("[orchestrator] Phase 6c (MANA Loud) — skipped: all APs are passive scope")
+            else:
+                log("[orchestrator] Phase 6c (MANA Loud) — enabled, running beacon spam")
+                phase_mana_loud(
+                    active_monitor, interface, output_dir, rogue_cfg, timeout,
+                )
 
         if _PAUSE and _PAUSE.check_and_pause(): sys.exit(_pp.EXIT_PAUSED)
 
         if phases_cfg.get("client_attacks", True):
-            log("[orchestrator] Phase 7 (Client Attacks) — enabled, testing PMF/BTM/probes")
-            phase_client_attacks(
-                active_monitor, target_aps, enriched_aps, output_dir, timeout,
-            )
+            if not active_aps and target_aps:
+                log("[orchestrator] Phase 7 (Client Attacks) — skipped: all APs are passive scope")
+            else:
+                log("[orchestrator] Phase 7 (Client Attacks) — enabled, testing PMF/BTM/probes")
+                phase_client_attacks(
+                    active_monitor, active_aps, active_enriched, output_dir, timeout,
+                )
 
         if _PAUSE and _PAUSE.check_and_pause(): sys.exit(_pp.EXIT_PAUSED)
 
         if phases_cfg.get("eap_downgrade", False):
-            log("[orchestrator] Phase 8 (EAP Downgrade) — enabled, testing weak EAP methods")
-            phase_eap_downgrade(
-                active_monitor, target_aps,
-                tools.get("eaphammer", "/opt/eaphammer/eaphammer"),
-                output_dir, timeout,
-            )
+            if not active_aps and target_aps:
+                log("[orchestrator] Phase 8 (EAP Downgrade) — skipped: all APs are passive scope")
+            else:
+                log("[orchestrator] Phase 8 (EAP Downgrade) — enabled, testing weak EAP methods")
+                phase_eap_downgrade(
+                    active_monitor, active_aps,
+                    tools.get("eaphammer", "/opt/eaphammer/eaphammer"),
+                    output_dir, timeout,
+                )
 
         if _PAUSE and _PAUSE.check_and_pause(): sys.exit(_pp.EXIT_PAUSED)
 
         if phases_cfg.get("eap_fast_anon", False):
-            log("[orchestrator] Phase 8b (EAP-FAST) — enabled, testing anonymous PAC provisioning")
-            phase_eap_fast_anon(
-                active_monitor, target_aps,
-                tools.get("eaphammer", "/opt/eaphammer/eaphammer"),
-                output_dir, timeout,
-            )
+            if not active_aps and target_aps:
+                log("[orchestrator] Phase 8b (EAP-FAST) — skipped: all APs are passive scope")
+            else:
+                log("[orchestrator] Phase 8b (EAP-FAST) — enabled, testing anonymous PAC provisioning")
+                phase_eap_fast_anon(
+                    active_monitor, active_aps,
+                    tools.get("eaphammer", "/opt/eaphammer/eaphammer"),
+                    output_dir, timeout,
+                )
 
         if _PAUSE and _PAUSE.check_and_pause(): sys.exit(_pp.EXIT_PAUSED)
 
         if phases_cfg.get("sae_downgrade", False):
-            log("[orchestrator] Phase 9 (SAE Downgrade) — enabled, testing WPA3/WPA2 transition mode")
-            phase_sae_downgrade(
-                active_monitor, interface, target_aps, enriched_aps,
-                output_dir, rogue_cfg, timeout,
-            )
+            if not active_aps and target_aps:
+                log("[orchestrator] Phase 9 (SAE Downgrade) — skipped: all APs are passive scope")
+            else:
+                log("[orchestrator] Phase 9 (SAE Downgrade) — enabled, testing WPA3/WPA2 transition mode")
+                phase_sae_downgrade(
+                    active_monitor, interface, active_aps, active_enriched,
+                    output_dir, rogue_cfg, timeout,
+                )
 
         if _PAUSE and _PAUSE.check_and_pause(): sys.exit(_pp.EXIT_PAUSED)
 
         if phases_cfg.get("legacy_attacks", True):
-            log("[orchestrator] Phase 11 (Legacy) — enabled, running TKIP/WPS/captive bypass")
-            phase_legacy_attacks(
-                active_monitor, target_aps, enriched_aps, output_dir,
-                tools, timeout,
-                managed_iface=interface,
-            )
+            if not active_aps and target_aps:
+                log("[orchestrator] Phase 11 (Legacy) — skipped: all APs are passive scope")
+            else:
+                log("[orchestrator] Phase 11 (Legacy) — enabled, running TKIP/WPS/captive bypass")
+                phase_legacy_attacks(
+                    active_monitor, active_aps, active_enriched, output_dir,
+                    tools, timeout,
+                    managed_iface=interface,
+                )
 
         # Phase 0-IV-VII: Cert/iPSK/captive-portal/identity analysis —
         # run AFTER capture-producing phases (wifite, deauth-handshake,
@@ -5814,11 +5883,14 @@ def run(config: dict, project: str) -> None:
         if _PAUSE and _PAUSE.check_and_pause(): sys.exit(_pp.EXIT_PAUSED)
 
         if phases_cfg.get("post_connection", False):
-            log("[orchestrator] Phase 10 (Post-Connection) — enabled, running ARP/LLMNR/nmap")
-            _ap_iface = (rogue_cfg.get("ap_interface") or "").strip()
-            if not _ap_iface:
-                _ap_iface = _find_ap_interface([interface, active_monitor])
-            phase_post_connection(_ap_iface, output_dir, post_cfg, timeout)
+            if not active_aps and target_aps:
+                log("[orchestrator] Phase 10 (Post-Connection) — skipped: all APs are passive scope")
+            else:
+                log("[orchestrator] Phase 10 (Post-Connection) — enabled, running ARP/LLMNR/nmap")
+                _ap_iface = (rogue_cfg.get("ap_interface") or "").strip()
+                if not _ap_iface:
+                    _ap_iface = _find_ap_interface([interface, active_monitor])
+                phase_post_connection(_ap_iface, output_dir, post_cfg, timeout)
 
     finally:
         disable_monitor_mode(active_monitor, interface)
@@ -5837,13 +5909,16 @@ def run(config: dict, project: str) -> None:
     # mode; running it while the interface is wlan0mon causes hostapd/scapy
     # to fail with "Interface not found".
     if phases_cfg.get("krack", True):
-        log("[orchestrator] Phase 5 (KRACK) — enabled, testing key reinstallation")
-        phase_krack(
-            interface, target_aps,
-            tools.get("krackattacks",
-                       "/opt/krackattacks-scripts/krackattack/krack-test-client.py"),
-            output_dir, timeout=timeout,
-        )
+        if not active_aps and target_aps:
+            log("[orchestrator] Phase 5 (KRACK) — skipped: all APs are passive scope")
+        else:
+            log("[orchestrator] Phase 5 (KRACK) — enabled, testing key reinstallation")
+            phase_krack(
+                interface, active_aps,
+                tools.get("krackattacks",
+                           "/opt/krackattacks-scripts/krackattack/krack-test-client.py"),
+                output_dir, timeout=timeout,
+            )
 
     save_findings(output_dir)
 
@@ -5916,6 +5991,15 @@ Examples:
     parser.add_argument("--scope-ssid", action="append", dest="scope_ssids",
                         metavar="SSID",
                         help="Scope whitelist SSID (repeatable)")
+    parser.add_argument("--scope-active", action="append", dest="scope_active_ssids",
+                        metavar="SSID",
+                        help="SSID in active scope — full testing (repeatable)")
+    parser.add_argument("--scope-passive", action="append", dest="scope_passive_ssids",
+                        metavar="SSID",
+                        help="SSID in passive scope — monitoring only (repeatable)")
+    parser.add_argument("--scope-default-mode", dest="scope_default_mode",
+                        choices=["active", "passive"], default=None,
+                        help="Default scope mode for unlisted SSIDs (default: active)")
     parser.add_argument("--domain", action="append", dest="domains",
                         metavar="DOMAIN",
                         help="Domain to deep-parse into wordlist entries (repeatable); "
@@ -6694,6 +6778,38 @@ def phase_captive_portal_test(target_aps: list, output_dir: Path,
         except Exception:
             pass
 
+        # 4. Pre-auth network visibility — check if other devices are
+        #    reachable before captive portal authentication
+        try:
+            _gw = _get_default_gateway(primary_iface)
+            if _gw:
+                _subnet = _gw.rsplit(".", 1)[0] + ".0/24"
+                out, rc = _run(["nmap", "-sn", "-e", primary_iface,
+                                "--source-port", "53", _subnet],
+                               timeout=30)
+                _hosts_up = out.count("Host is up")
+                bypass_results["pre_auth_hosts_visible"] = _hosts_up
+                if _hosts_up > 1:
+                    finding_from_cat("AETHER-SPLASH-005",
+                                     data={**bypass_results,
+                                           "hosts_visible": _hosts_up,
+                                           "subnet": _subnet,
+                                           "nmap_excerpt": out[:800]},
+                                     title_override=f"Devices visible on open network "
+                                                    f"without captive portal authentication "
+                                                    f"on {ssid!r}: {_hosts_up} host(s) reachable")
+        except Exception:
+            pass
+
+        # 5. Explicit captive portal detection finding
+        _has_portal = (bypass_results.get("splash_url")
+                       or bypass_results.get("dns_bypass") is False)
+        if _has_portal:
+            finding_from_cat("AETHER-SPLASH-006",
+                             data={**bypass_results},
+                             title_override=f"Captive portal detected on open wireless "
+                                            f"network {ssid!r}")
+
         (splash_dir / f"{ssid.replace(' ','_')}_splash.json").write_text(
             json.dumps(bypass_results, indent=2), encoding="utf-8")
 
@@ -6968,6 +7084,16 @@ def main():
         config.setdefault("scope", {})["bssids"] = args.scope_bssids
     if args.scope_ssids:
         config.setdefault("scope", {})["ssids"] = args.scope_ssids
+    if args.scope_active_ssids:
+        modes = config.setdefault("scope", {}).setdefault("modes", {})
+        for s in args.scope_active_ssids:
+            modes[s] = "active"
+    if args.scope_passive_ssids:
+        modes = config.setdefault("scope", {}).setdefault("modes", {})
+        for s in args.scope_passive_ssids:
+            modes[s] = "passive"
+    if args.scope_default_mode:
+        config.setdefault("scope", {})["default_mode"] = args.scope_default_mode
     if args.domains:
         config["domains"] = args.domains
     if args.hashcat_rules:
