@@ -45,9 +45,9 @@ Security testing is a professional discipline with significant ethical and legal
 
 # Aether
 
-**Wireless penetration testing orchestrator** — five-phase automated assessment of WPA/WPA2/WPA3 networks with real-time Spectre protocol token emission.
+**Wireless penetration testing orchestrator** — five-phase automated assessment of WPA/WPA2/WPA3 networks with real-time Crucible protocol token emission.
 
-Aether automates the full wireless attack surface: monitor mode management, AP discovery, handshake capture and cracking, WPA-Enterprise credential harvesting, WPA3 SAE cryptographic vulnerability testing, resource exhaustion, and KRACK key reinstallation testing — sequenced into a single configurable pipeline. When launched by [Spectre](../spectre/) with `SPECTRE_MANAGED=1`, structured protocol tokens stream to the frontend in real time. Run standalone or under orchestration.
+Aether automates the full wireless attack surface: monitor mode management, AP discovery, handshake capture and cracking, WPA-Enterprise credential harvesting, WPA3 SAE cryptographic vulnerability testing, resource exhaustion, and KRACK key reinstallation testing — sequenced into a single configurable pipeline. When launched by Crucible with `CRUCIBLE_MANAGED=1`, structured protocol tokens stream to the frontend in real time. Run standalone or under orchestration.
 
 ---
 
@@ -131,8 +131,8 @@ sudo python3 aether.py --config config.json --project pentest --interface wlan1
 # List available phases
 python3 aether.py --list-phases
 
-# Spectre-managed (launched automatically by Spectre)
-SPECTRE_MANAGED=1 python3 aether.py --config config.json --project assessment
+# Crucible-managed (launched automatically by Crucible)
+CRUCIBLE_MANAGED=1 python3 aether.py --config config.json --project assessment
 ```
 
 ---
@@ -268,9 +268,9 @@ Runs three KRACK test variants against up to 2 target APs. Disables hardware cry
 
 ---
 
-## Spectre Protocol
+## Crucible Protocol
 
-When Aether runs under Spectre orchestration (`SPECTRE_MANAGED=1`), it emits structured tokens to stdout that Spectre parses line-by-line. All tokens are flushed immediately for real-time streaming.
+When Aether runs under Crucible orchestration (`CRUCIBLE_MANAGED=1`), it emits structured tokens to stdout that Crucible parses line-by-line. All tokens are flushed immediately for real-time streaming.
 
 | Token | Format | Action |
 |-------|--------|--------|
@@ -387,7 +387,7 @@ aether/
 └── config.json    Configuration template
 ```
 
-Aether is intentionally self-contained — one file, no external Python dependencies beyond the standard library. Place `aether.py` in the same directory as Spectre's `app.py` for Spectre orchestration.
+Aether is intentionally self-contained — one file, no external Python dependencies beyond the standard library. Place `aether.py` in `/opt/pr0t31n/Aether/` for Crucible orchestration.
 
 ---
 
