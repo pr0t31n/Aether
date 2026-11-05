@@ -841,10 +841,10 @@ def phase_mt76_quirks(dry_run: bool) -> None:
 
 
 def phase_wordlists(dry_run: bool) -> None:
-    """Download SecLists probable-v2-wpa-top4800.txt for Spectre-managed WPA cracking.
+    """Download SecLists probable-v2-wpa-top4800.txt for Crucible-managed WPA cracking.
 
     Aether's default base wordlist is rockyou.txt (covered by the kali apt package
-    'wordlists'). Spectre-managed sessions additionally invoke Aether with
+    'wordlists'). Crucible-managed sessions additionally invoke Aether with
     probable-v2-wpa-top4800.txt for higher-precision WPA-specific coverage. This
     phase fetches that list to /usr/share/wordlists/ idempotently — if the file
     is already present and non-empty, the download is skipped."""
@@ -1032,7 +1032,7 @@ def main() -> None:
     else:
         note("Not running as root — skipping NM exclusion + mt76 quirks.")
 
-    # Phase 6 — WPA wordlists (SecLists probable-v2-wpa-top4800.txt for Spectre-managed runs)
+    # Phase 6 — WPA wordlists (SecLists probable-v2-wpa-top4800.txt for Crucible-managed runs)
     phase_wordlists(dry_run)
 
     # Verify

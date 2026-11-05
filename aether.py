@@ -12,11 +12,11 @@ Orchestrates multi-phase wireless assessments via:
   Phase 5   — WPA2 KRACK key reinstallation testing     (krackattacks-scripts)
 
 Protocol tokens (emitted to stdout for Crucible frontend):
-  __SPECTRE_LOG__    <message>
-  __SPECTRE_ERR__    <message>
-  __SPECTRE_STATUS__ <json>
-  __SPECTRE_FINDING__<json>
-  __SPECTRE_PROMPT__ <message>
+  __CRUCIBLE_LOG__    <message>
+  __CRUCIBLE_ERR__    <message>
+  __CRUCIBLE_STATUS__ <json>
+  __CRUCIBLE_FINDING__<json>
+  __CRUCIBLE_PROMPT__ <message>
 
 Usage:
   python3 aether.py --config config.json --project my_assessment
@@ -502,7 +502,7 @@ def _merge_native_findings(records: list) -> list:
 
 def save_findings(output_dir: Path) -> None:
     consolidated = _merge_native_findings(_findings_collected)
-    out = output_dir / "findings_spectre.json"
+    out = output_dir / "findings_crucible.json"
     out.write_text(json.dumps(consolidated, indent=2), encoding="utf-8")
     log(f"Findings written: {out} "
         f"({len(consolidated)} consolidated; {len(_findings_collected)} raw)")
@@ -520,7 +520,7 @@ def _flush_findings():
 
 
 def _u_synthesize_outputs(output_dir: Path, native_findings: list) -> None:
-    """Translate Aether's findings_spectre.json entries into universal schema
+    """Translate Aether's findings_crucible.json entries into universal schema
     and write findings.json + summary.json. BSSID/SSID map to ip/hostname."""
     try:
         import sys as _s
@@ -1230,7 +1230,7 @@ def _concat_wordlists(wordlists: list[str]) -> str | None:
     """Concatenate multiple base wordlists into a single deduplicated temp file.
 
     Filters to WPA passphrase length bounds (8-63 chars) per entry and preserves
-    the order of input lists (so operator-prioritised lists like Spectre's
+    the order of input lists (so operator-prioritised lists like Crucible's
     probable-v2-wpa-top4800.txt land before rockyou.txt). Returns the temp file
     path, or None if no input files exist or are non-empty.
     """
@@ -1906,7 +1906,7 @@ def disable_monitor_mode(monitor_iface: str, original_iface: str) -> None:
         ok, reason = _verify_radio_health(original_iface)
         if not ok:
             log(f"WARNING: radio still unhealthy after second reset: {reason}")
-            log("Spectre/operator should investigate before next session.")
+            log("Operator should investigate before next session.")
 
     log(f"Monitor mode disabled — {original_iface} restored to managed mode")
 
@@ -2455,7 +2455,7 @@ def phase_wireless_intel(
         for c in ap["clients"]:
             log(f"      ↳ {c['mac']}  sig={c['signal']}dBm  pkts={c['packets']}")
 
-    # Persist to access_points.json (read by Spectre Access Points tab)
+    # Persist to access_points.json (read by Crucible Access Points tab)
     ap_json_path = output_dir / "access_points.json"
     ap_json_path.write_text(json.dumps({
         "scan_time":    datetime.now().isoformat(),

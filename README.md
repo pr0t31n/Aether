@@ -60,7 +60,7 @@ Aether automates the full wireless attack surface: monitor mode management, AP d
 - **Monitor mode management** — airmon-ng primary with `iw` + `ip` fallback; enabled before assessment, disabled in `finally` block on any exit path
 - **AP discovery** — airodump-ng primary with iwlist fallback; SSID and BSSID filtering applied post-scan; channel and encryption type extracted per AP
 - **Per-phase timeout control** — configurable `timeout_per_phase` (default 300 s); each phase tracks elapsed time and terminates subprocesses on expiry
-- **Spectre protocol integration** — emits `__SPECTRE_LOG__`, `__SPECTRE_ERR__`, `__SPECTRE_STATUS__`, and `__SPECTRE_FINDING__` tokens to stdout with `flush=True` for real-time parsing
+- **Crucible protocol integration** — emits `__CRUCIBLE_LOG__`, `__CRUCIBLE_ERR__`, `__CRUCIBLE_STATUS__`, and `__CRUCIBLE_FINDING__` tokens to stdout with `flush=True` for real-time parsing
 - **Configurable tool paths** — all external tool binaries set in `config.json`; missing tools skip their phase gracefully rather than aborting
 - **CLI overrides** — interface, wordlist, and target SSIDs overridable at runtime without editing config
 
@@ -277,13 +277,13 @@ When Aether runs under Crucible orchestration (`CRUCIBLE_MANAGED=1`), it emits s
 
 | Token | Format | Action |
 |-------|--------|--------|
-| `__SPECTRE_LOG__` | `<token> <message>` | Informational log line |
-| `__SPECTRE_ERR__` | `<token> <message>` | Error line (coloured red in Spectre) |
-| `__SPECTRE_STATUS__` | `<token> <JSON>` | Phase status update |
-| `__SPECTRE_FINDING__` | `<token> <JSON>` | Security finding |
-| `__SPECTRE_PROMPT__` | `<token> <message>` | Defined; not currently emitted |
+| `__CRUCIBLE_LOG__` | `<token> <message>` | Informational log line |
+| `__CRUCIBLE_ERR__` | `<token> <message>` | Error line (coloured red in Crucible) |
+| `__CRUCIBLE_STATUS__` | `<token> <JSON>` | Phase status update |
+| `__CRUCIBLE_FINDING__` | `<token> <JSON>` | Security finding |
+| `__CRUCIBLE_PROMPT__` | `<token> <message>` | Defined; not currently emitted |
 
-### `__SPECTRE_STATUS__` payload
+### `__CRUCIBLE_STATUS__` payload
 
 ```json
 {
@@ -299,7 +299,7 @@ Phase IDs: `p1_wifite`, `p2_eaphammer`, `p3_dragonslayer`, `p4_dragondrain`, `p5
 
 Status values: `running`, `complete`, `skipped`
 
-### `__SPECTRE_FINDING__` payload
+### `__CRUCIBLE_FINDING__` payload
 
 ```json
 {
@@ -365,7 +365,7 @@ Severity values: `CRITICAL`, `HIGH`, `MEDIUM`, `LOW`
 Each phase function:
 - Validates tool existence → skips with `status: skipped` if missing
 - Emits `status: running` on start, `status: complete` on finish
-- Pipes subprocess stdout line-by-line; keyword-matches trigger `__SPECTRE_FINDING__` tokens
+- Pipes subprocess stdout line-by-line; keyword-matches trigger `__CRUCIBLE_FINDING__` tokens
 - Terminates subprocess on timeout; logs error, continues to next phase
 
 ---
