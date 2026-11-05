@@ -51,6 +51,9 @@ Aether automates the full wireless attack surface: monitor mode management, AP d
 
 ---
 
+
+> **[View full documentation on the Codex Wiki](https://wiki.pr0t31n.com/tools/aether)** — detailed features, CLI reference, findings catalogue, and integration guides.
+
 ## Features
 
 - **5-phase attack pipeline** — WPA/WPA2/WPA3 handshake capture + offline cracking, WPA-Enterprise rogue AP credential harvesting, WPA3 SAE Dragonblood cryptographic testing, SAE resource exhaustion flooding, and KRACK key reinstallation testing; each phase independently toggleable
