@@ -56,14 +56,19 @@ Aether automates the full wireless attack surface: monitor mode management, AP d
 
 ## Features
 
-- **25-phase attack pipeline** — WEP cracking, PMKID clientless capture, WPA/WPA2/WPA3 handshake capture + offline cracking, deauth-triggered handshake capture, WPA-Enterprise rogue AP credential harvesting, WPA3 SAE Dragonblood cryptographic testing, SAE resource exhaustion flooding, KRACK key reinstallation testing, Evil Twin / KARMA / MANA loud mode, client-side PMF/BTM/probe attacks, EAP downgrade, EAP-FAST anonymous PAC provisioning, SAE transition-mode downgrade, post-connection ARP/LLMNR/nmap, legacy TKIP/WPS/captive bypass, server certificate analysis, Meraki iPSK detection, captive portal splash bypass, and EAP-TLS identity disclosure analysis; each phase independently toggleable
+- **25-phase attack pipeline** — WEP cracking, PMKID clientless capture, WPA/WPA2/WPA3 handshake capture + offline cracking, deauth-triggered handshake capture, WPA-Enterprise rogue AP credential harvesting, WPA3 SAE Dragonblood cryptographic testing, SAE resource exhaustion flooding, KRACK key reinstallation testing, Evil Twin / KARMA / MANA loud mode, client-side PMF/BTM/probe attacks, EAP downgrade, EAP-FAST anonymous PAC provisioning, SAE transition-mode downgrade, post-connection ARP/LLMNR/nmap, legacy TKIP/WPS/captive bypass, server certificate analysis, Meraki iPSK detection, captive portal splash bypass, EAP-TLS identity disclosure analysis, and firmware vulnerability correlation; each phase independently toggleable
+- **Weak authentication detection** — `weakest_auth_tier` logic evaluates observed authentication types and generates findings for weak or deprecated authentication methods (Open, WEP, TKIP-only, WPA-Personal without PMF) with risk-graded severity
 - **Wireless intelligence** — AP enumeration with client counting, signal scoring, vendor OUI lookup (52,000+ vendor database via nmap-mac-prefixes), LAA detection for randomized BSSIDs, and automatic best-target selection; contextual findings for every observed AP/client/channel/auth type
-- **Comprehensive AP fingerprinting** — multi-method vendor/model identification: Vendor-Specific IE extraction from beacons (tshark), WPS device info (wash + tshark), full OUI database, wash chipset ID; confidence-ranked aggregation identifies APs even with randomized BSSIDs
+- **Enhanced passive fingerprinting (v1.30.0)** — overhauled passive fingerprinting with new detection methods: Vendor-Specific IE extraction from beacons (tshark), WPS device info (wash + tshark), full OUI database, wash chipset ID; confidence-ranked aggregation identifies APs even with randomized BSSIDs; improved accuracy for multi-SSID deployments and enterprise environments
+- **Firmware vulnerability correlation** — correlates AP fingerprints against a wireless vulnerability database (`wireless_vuln_db.json`) to identify known firmware CVEs, default credentials, and protocol-level weaknesses; emits per-AP findings with vendor/model match confidence
+- **Weak/deprecated auth detection** — classifies every observed AP's authentication type (OPEN, WEP, WPA-PSK, WPA2-PSK, WPA2-Enterprise, WPA3-SAE, etc.) and emits configuration findings for PSK-based networks (LOW), deprecated WPA v1 protocol use (MEDIUM), PEAP/MSCHAPv2 enterprise configurations (LOW), and inconsistent auth modes across BSSIDs sharing an SSID (HIGH)
 - **Vendor infrastructure recon** — classifies APs by manufacturer, identifies shared-physical-AP multi-SSID deployments, includes Meraki-specific sub-case for iPSK/firmware analysis
 - **Scope enforcement** — per-SSID active/passive mode scoping; passive SSIDs get monitoring only, no client attacks
+- **Radio health verification** — `_verify_radio_health()` post-teardown check validates the wireless interface returned to managed mode cleanly; includes EBUSY retry logic for interfaces held by lingering processes after monitor mode teardown
 - **Monitor mode management** — airmon-ng primary with `iw` + `ip` fallback; enabled before assessment, disabled in `finally` block on any exit path
 - **AP discovery** — airodump-ng primary with iwlist fallback; SSID and BSSID filtering applied post-scan; channel and encryption type extracted per AP
 - **Per-phase timeout control** — configurable `timeout_per_phase` (default 300 s); each phase tracks elapsed time and terminates subprocesses on expiry
+- **Finding quality improvements** — findings carry structured categories, evidence file references, per-target attribution fields, and wireless-specific auth fields (`ssid`, `bssid`, `wireless_data`) per universal schema v1.1
 - **Crucible protocol integration** — emits `__CRUCIBLE_LOG__`, `__CRUCIBLE_ERR__`, `__CRUCIBLE_STATUS__`, and `__CRUCIBLE_FINDING__` tokens to stdout with `flush=True` for real-time parsing
 - **Domain-derived wordlists** — deep-parses domains into password mutations; merges with base wordlist and website scrape output
 - **Multi-wordlist support** — multiple `--wordlist` paths are merged and deduplicated into a single base wordlist
@@ -228,12 +233,15 @@ Aether executes up to 25 phases in the order shown below. Each phase is independ
 | 0-I | `p0_intel` | Wireless Intelligence | (always runs) | on | airodump-ng / iwlist |
 | 0-II | `p_ctx` | Contextual Intelligence | `contextual_intel` | on | (analysis) |
 | 0-III | `p_meraki` | Vendor Reconnaissance | `vendor_recon` / `meraki_recon` | on | tshark / wash / (analysis) |
+| 0-IV | `p_firmware` | Firmware Vulnerability Correlation | `firmware_correlation` | on | (analysis) |
 
 **Phase 0-I: Wireless Intelligence** — Enumerates all APs broadcasting the target SSID(s), identifies connected clients, scores and selects the best target AP based on signal strength and client count. Vendor OUI lookup (52,000+ entries via nmap-mac-prefixes) provides manufacturer context. Beacon pcap is captured alongside CSV for IE and WPS extraction. LAA (Locally Administered Address) detection flags randomized BSSIDs where OUI lookup is unreliable.
 
-**Phase 0-II: Contextual Intelligence** — Emits informational findings for every observed AP, client, vendor, channel, and authentication type so the engagement report has full attribution regardless of which risk-graded findings subsequent phases produce. LAA BSSIDs generate dedicated findings. AP inventory includes fingerprint data, vendor IE OUIs, and WPS device info when available.
+**Phase 0-II: Contextual Intelligence** — Emits informational findings for every observed AP, client, vendor, channel, and authentication type so the engagement report has full attribution regardless of which risk-graded findings subsequent phases produce. LAA BSSIDs generate dedicated findings. AP inventory includes fingerprint data, vendor IE OUIs, and WPS device info when available. Additionally classifies each AP's authentication type and emits configuration-grade findings: LOW for WPA2-PSK networks using pre-shared key authentication, MEDIUM for deprecated WPA (version 1) protocol use, and HIGH for SSIDs broadcast across BSSIDs with inconsistent auth-mode strength (mixed-auth downgrade detection).
 
 **Phase 0-III: Vendor Reconnaissance** — Multi-method AP vendor/model identification. Extracts Vendor-Specific Information Elements from beacon frames (identifies real manufacturer even with randomized BSSIDs), WPS device info (manufacturer, model, serial via wash + tshark), OUI database lookup (for non-LAA BSSIDs), and wash chipset identification. Results are aggregated by confidence priority into `ap_fingerprints.json`. Includes Meraki-specific sub-case (AETHER-MERAKI-001/002/003) and shared-physical-AP multi-SSID detection. Accepts both `vendor_recon` and legacy `meraki_recon` config keys.
+
+**Phase 0-IV: Firmware Vulnerability Correlation** — Correlates AP fingerprints from Phase 0-III against `wireless_vuln_db.json`, a curated database of wireless firmware CVEs, default management credentials, and protocol-level weaknesses. Emits three finding types: firmware CVE matches (AETHER-FW-CVE) with per-AP vendor/model/confidence data, default credential sets (AETHER-FW-DEFCRED) for management interfaces, and protocol vulnerabilities (AETHER-FW-PROTO) affecting broad AP families. Results saved to `firmware_risk.json`. Skips gracefully when the vuln DB is absent or no APs were fingerprinted.
 
 ### WEP & WPA Cracking
 
@@ -331,6 +339,14 @@ Phase 7 contains three sub-phases:
 - **11b (`p11_wifidirect`)** -- Wi-Fi Direct / P2P WPS Scanning for misconfigured direct connections
 - **11c (`p11_captive`)** -- Captive Portal Bypass Testing using MAC spoofing and DNS manipulation
 
+### Firmware Correlation
+
+| # | Phase ID | Label | Config Key | Default | Tool(s) |
+|---|----------|-------|-----------|---------|---------|
+| -- | `p_firmware` | Firmware Vulnerability Correlation | `firmware_correlation` | on | (analysis) |
+
+**Phase p_firmware -- Firmware Vulnerability Correlation** -- Cross-references identified AP vendor/model/firmware information (from Phase 0-III vendor reconnaissance) against known firmware vulnerability databases. Generates findings for APs running firmware versions with known CVEs. Runs after vendor recon data is available; no external tools required (pure analysis phase).
+
 ### Post-Capture Analysis (always-on)
 
 | # | Phase ID | Label | Config Key | Default | Tool(s) |
@@ -383,6 +399,7 @@ Phase 7 contains three sub-phases:
     "legacy_attacks":    true,
     "contextual_intel":  true,
     "vendor_recon":      true,
+    "firmware_correlation":      true,
     "server_cert_analysis":     true,
     "ipsk_test":                true,
     "captive_portal_test":      true,
@@ -520,6 +537,9 @@ Severity values: `CRITICAL`, `HIGH`, `MEDIUM`, `LOW`, `INFO`
 └── aether_output/
     ├── intel/
     │   └── wireless_intel.json        AP enumeration + scoring data
+    ├── vendor_recon/
+    │   └── ap_fingerprints.json       Multi-method AP vendor/model identification
+    ├── firmware_risk.json             Firmware CVE matches, default creds, protocol vulns
     ├── wep/
     │   └── wep_<SSID>.txt             Per-SSID WEP cracking output
     ├── pmkid/
