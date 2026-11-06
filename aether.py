@@ -499,6 +499,12 @@ _AETHER_MERGE_KEYS = {
     "AETHER-023":             lambda d: ("bssid",  d.get("bssid", "")),  # btm_hijack
     "pmf_not_enforced":       lambda d: ("bssid",  d.get("bssid", "")),
     "btm_hijack":             lambda d: ("bssid",  d.get("bssid", "")),
+    # Firmware correlation: protocol vulns are global; default creds merge per vendor+model
+    "AETHER-FW-PROTO":        lambda d: ("vuln_id", d.get("vuln_id", "")),
+    "AETHER-FW-DEFCRED":      lambda d: ("vendor_model", "|".join([
+                                  d.get("matched_vendor", ""),
+                                  d.get("matched_model", ""),
+                                  d.get("service", "")])),
 }
 
 # Canonical merged-finding titles.  When a group merges, the title is
@@ -520,6 +526,8 @@ _AETHER_MERGED_TITLES = {
     "AETHER-023":             lambda d: f"Wireless Vulnerability: BSS Transition Management Hijack Successful on BSSID {d.get('bssid','')}",
     "pmf_not_enforced":       lambda d: f"Wireless Misconfiguration: PMF Not Required: Management Frames Unprotected on BSSID {d.get('bssid','')}",
     "btm_hijack":             lambda d: f"Wireless Vulnerability: BSS Transition Management Hijack Successful on BSSID {d.get('bssid','')}",
+    "AETHER-FW-PROTO":        lambda d: f"Protocol Vulnerability: {d.get('vuln_id', '')}",
+    "AETHER-FW-DEFCRED":      lambda d: f"Default Credentials: {d.get('matched_vendor','')} {d.get('matched_model','')} — {d.get('service','')}",
 }
 
 
@@ -6046,6 +6054,11 @@ def run(config: dict, project: str) -> None:
         if phases_cfg.get("vendor_recon", True) or phases_cfg.get("meraki_recon", True):
             phase_vendor_recon(enriched_aps, output_dir)
 
+        # Phase 0-IV: Firmware Correlation — match fingerprinted APs against
+        # known firmware CVEs, default credentials, and protocol weaknesses.
+        if phases_cfg.get("firmware_correlation", True):
+            phase_firmware_correlation(enriched_aps, output_dir)
+
         # Narrow subsequent phases to the best-scored AP when user has not
         # specified an explicit BSSID — reduces false-positive capture and
         # avoids attacking out-of-scope BSSIDs.
@@ -6824,6 +6837,224 @@ def phase_vendor_recon(enriched_aps: list, output_dir: Path) -> None:
 
 
 phase_meraki_recon = phase_vendor_recon
+
+
+# ── Phase: Firmware Vulnerability Correlation ────────────────────────────────
+
+def _load_wireless_vuln_db() -> dict | None:
+    """Load the wireless firmware vulnerability database.
+    Searches the Aether repo dir first, then the shared dir."""
+    for candidate in (Path(__file__).parent / "wireless_vuln_db.json",
+                      Path("/opt/pr0t31n/shared/wireless_vuln_db.json")):
+        if candidate.exists():
+            try:
+                return json.loads(candidate.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                pass
+    return None
+
+
+def _match_vendor(fp_vendor: str, vendor_entry: dict) -> bool:
+    """Check if a fingerprinted vendor string matches a DB vendor entry."""
+    v = fp_vendor.lower().strip()
+    if not v or v == "unknown":
+        return False
+    for pat in vendor_entry.get("vendor_patterns", []):
+        if pat.lower() in v or v in pat.lower():
+            return True
+    if vendor_entry.get("vendor", "").lower() in v or v in vendor_entry.get("vendor", "").lower():
+        return True
+    return False
+
+
+def _match_model(fp_model: str, model_entry: dict) -> bool:
+    """Check if a fingerprinted model string matches a DB model entry."""
+    m = fp_model.strip()
+    if not m:
+        return True  # no model = vendor-level match (report all model vulns)
+    regex = model_entry.get("model_regex", "")
+    if regex:
+        try:
+            if re.search(regex, m, re.IGNORECASE):
+                return True
+        except re.error:
+            pass
+    pat = model_entry.get("model_pattern", "").replace("*", ".*")
+    if pat:
+        try:
+            if re.match(pat, m, re.IGNORECASE):
+                return True
+        except re.error:
+            pass
+    return False
+
+
+def _correlate_firmware_vulns(fingerprints: list, vuln_db: dict) -> dict:
+    """Correlate AP fingerprints against the wireless vulnerability database.
+    Returns a dict with matched_vulns, default_creds, protocol_vulns lists."""
+    matched_vulns = []
+    default_creds = []
+    seen_vuln_keys = set()
+    seen_cred_keys = set()
+
+    for fp in fingerprints:
+        vendor = fp.get("vendor", "Unknown")
+        model = fp.get("model", "")
+        bssid = fp.get("bssid", "")
+        ssid = fp.get("ssid", "")
+
+        for vendor_entry in vuln_db.get("vendors", []):
+            if not _match_vendor(vendor, vendor_entry):
+                continue
+            for model_entry in vendor_entry.get("models", []):
+                if not _match_model(model, model_entry):
+                    continue
+                for vuln in model_entry.get("known_vulns", []):
+                    vk = (vuln["id"], bssid)
+                    if vk in seen_vuln_keys:
+                        continue
+                    seen_vuln_keys.add(vk)
+                    matched_vulns.append({
+                        "vuln_id": vuln["id"],
+                        "title": vuln["title"],
+                        "cves": vuln.get("cves", []),
+                        "risk": vuln.get("risk", "MEDIUM"),
+                        "cvss_score": vuln.get("cvss_score"),
+                        "firmware_affected": vuln.get("firmware_affected", ""),
+                        "description": vuln.get("description", ""),
+                        "remediation": vuln.get("remediation", ""),
+                        "references": vuln.get("references", []),
+                        "matched_vendor": vendor,
+                        "matched_model": model,
+                        "bssid": bssid,
+                        "ssid": ssid,
+                        "confidence": fp.get("confidence", "medium"),
+                        "match_method": fp.get("method", ""),
+                    })
+                for cred in model_entry.get("default_credentials", []):
+                    ck = (cred.get("username", ""), cred.get("service", ""), bssid)
+                    if ck in seen_cred_keys:
+                        continue
+                    seen_cred_keys.add(ck)
+                    default_creds.append({
+                        "username": cred.get("username", ""),
+                        "password": cred.get("password", ""),
+                        "service": cred.get("service", ""),
+                        "notes": cred.get("notes", ""),
+                        "matched_vendor": vendor,
+                        "matched_model": model,
+                        "bssid": bssid,
+                        "ssid": ssid,
+                    })
+
+    protocol_vulns = vuln_db.get("protocol_vulns", [])
+
+    return {
+        "matched_vulns": matched_vulns,
+        "default_credentials": default_creds,
+        "protocol_vulns": protocol_vulns,
+        "total_aps_checked": len(fingerprints),
+        "aps_with_matches": len({v["bssid"] for v in matched_vulns}),
+    }
+
+
+def phase_firmware_correlation(enriched_aps: list, output_dir: Path) -> None:
+    """Correlate AP fingerprints against known wireless firmware vulnerabilities,
+    default credentials, and protocol-level weaknesses."""
+    _check_pause()
+    status("p_firmware", "Phase 0-IV: Firmware Vulnerability Correlation", "running")
+    log(f"[0-IV] START: Firmware Vulnerability Correlation — "
+        f"checking {len(enriched_aps or [])} AP(s)")
+
+    vuln_db = _load_wireless_vuln_db()
+    if not vuln_db:
+        log("[0-IV] wireless_vuln_db.json not found — skipping firmware correlation")
+        status("p_firmware", "Phase 0-IV: Firmware Vulnerability Correlation",
+               "complete", "vuln DB not found")
+        return
+
+    fp_file = output_dir / "vendor_recon" / "ap_fingerprints.json"
+    if fp_file.exists():
+        try:
+            fingerprints = json.loads(fp_file.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            fingerprints = []
+    else:
+        fingerprints = [_aggregate_ap_fingerprint(ap) | {
+            "bssid": ap.get("bssid", ""), "ssid": ap.get("ssid", "")
+        } for ap in (enriched_aps or [])
+            if _aggregate_ap_fingerprint(ap).get("vendor", "Unknown") != "Unknown"]
+
+    if not fingerprints:
+        log("[0-IV] No identified APs to correlate — skipping")
+        status("p_firmware", "Phase 0-IV: Firmware Vulnerability Correlation",
+               "complete", "no fingerprinted APs")
+        return
+
+    results = _correlate_firmware_vulns(fingerprints, vuln_db)
+    out_file = str(output_dir / "firmware_risk.json")
+
+    for mv in results["matched_vulns"]:
+        finding_from_cat(
+            "AETHER-FW-CVE",
+            data={
+                "bssid": mv["bssid"], "ssid": mv["ssid"],
+                "vuln_id": mv["vuln_id"],
+                "cves": mv["cves"],
+                "firmware_affected": mv["firmware_affected"],
+                "matched_vendor": mv["matched_vendor"],
+                "matched_model": mv["matched_model"],
+                "confidence": mv["confidence"],
+                "match_method": mv["match_method"],
+                "references": mv["references"],
+                "remediation": mv["remediation"],
+            },
+            output_file=out_file,
+            title_override=f"Firmware Risk: {mv['title']} ({mv['matched_vendor']} "
+                           f"{mv['matched_model']}) [{mv['bssid']}]",
+        )
+
+    for dc in results["default_credentials"]:
+        finding_from_cat(
+            "AETHER-FW-DEFCRED",
+            data={
+                "bssid": dc["bssid"], "ssid": dc["ssid"],
+                "username": dc["username"],
+                "service": dc["service"],
+                "notes": dc["notes"],
+                "matched_vendor": dc["matched_vendor"],
+                "matched_model": dc["matched_model"],
+            },
+            output_file=out_file,
+            title_override=f"Default Credentials: {dc['matched_vendor']} "
+                           f"{dc['matched_model']} — {dc['service']} "
+                           f"({dc['username']}) [{dc['bssid']}]",
+        )
+
+    for pv in results["protocol_vulns"]:
+        finding_from_cat(
+            "AETHER-FW-PROTO",
+            data={
+                "vuln_id": pv["id"],
+                "cves": pv.get("cves", []),
+                "affected_all": pv.get("affected_all", False),
+                "references": pv.get("references", []),
+                "remediation": pv.get("remediation", ""),
+            },
+            output_file=out_file,
+            title_override=f"Protocol Vulnerability: {pv['title']}",
+        )
+
+    (output_dir / "firmware_risk.json").write_text(
+        json.dumps(results, indent=2), encoding="utf-8")
+
+    n_vulns = len(results["matched_vulns"])
+    n_creds = len(results["default_credentials"])
+    n_proto = len(results["protocol_vulns"])
+    log(f"[0-IV] END: Firmware Correlation — {n_vulns} CVE match(es), "
+        f"{n_creds} default credential set(s), {n_proto} protocol vuln(s)")
+    status("p_firmware", "Phase 0-IV: Firmware Vulnerability Correlation",
+           "complete", f"{n_vulns} CVEs, {n_creds} creds, {n_proto} proto")
 
 
 # ── Phase: EAP-TLS Server Certificate Analysis ────────────────────────────
