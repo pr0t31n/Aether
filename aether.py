@@ -27,8 +27,10 @@ Usage:
 import argparse
 import json
 import errno
+import fcntl
 import math
 import os
+import pty
 import platform
 import re
 import select
@@ -52,6 +54,7 @@ import ipaddress
 import queue
 import socket
 import struct
+import termios
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
@@ -3155,13 +3158,24 @@ def phase_wifite(
             # reliably on timeout.  communicate() is used instead of readline()
             # because wifite2 emits \r-terminated progress lines; readline()
             # would block indefinitely waiting for \n.
+            #
+            # wifite2 calls `stty size` for terminal dimensions — crashes
+            # with DEVNULL stdin.  Give it a sized pty instead.
+            _pty_master, _pty_slave = pty.openpty()
+            try:
+                _ws = struct.pack('HHHH', 24, 80, 0, 0)
+                fcntl.ioctl(_pty_slave, termios.TIOCSWINSZ, _ws)
+            except OSError:
+                pass
             proc = subprocess.Popen(
                 _cmd,
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                stdin=subprocess.DEVNULL,
+                stdin=_pty_slave,
                 cwd=str(wifite_dir),
                 start_new_session=True,
             )
+            os.close(_pty_slave)
+            os.close(_pty_master)
             try:
                 raw_out, _ = proc.communicate(timeout=wifite_deadline)
             except subprocess.TimeoutExpired:
