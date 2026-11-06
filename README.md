@@ -57,8 +57,9 @@ Aether automates the full wireless attack surface: monitor mode management, AP d
 ## Features
 
 - **25-phase attack pipeline** — WEP cracking, PMKID clientless capture, WPA/WPA2/WPA3 handshake capture + offline cracking, deauth-triggered handshake capture, WPA-Enterprise rogue AP credential harvesting, WPA3 SAE Dragonblood cryptographic testing, SAE resource exhaustion flooding, KRACK key reinstallation testing, Evil Twin / KARMA / MANA loud mode, client-side PMF/BTM/probe attacks, EAP downgrade, EAP-FAST anonymous PAC provisioning, SAE transition-mode downgrade, post-connection ARP/LLMNR/nmap, legacy TKIP/WPS/captive bypass, server certificate analysis, Meraki iPSK detection, captive portal splash bypass, and EAP-TLS identity disclosure analysis; each phase independently toggleable
-- **Wireless intelligence** — AP enumeration with client counting, signal scoring, vendor OUI lookup, and automatic best-target selection; contextual findings for every observed AP/client/channel/auth type
-- **Meraki infrastructure recon** — classifies APs, identifies shared-physical-AP multi-SSID deployments, fingerprints firmware
+- **Wireless intelligence** — AP enumeration with client counting, signal scoring, vendor OUI lookup (52,000+ vendor database via nmap-mac-prefixes), LAA detection for randomized BSSIDs, and automatic best-target selection; contextual findings for every observed AP/client/channel/auth type
+- **Comprehensive AP fingerprinting** — multi-method vendor/model identification: Vendor-Specific IE extraction from beacons (tshark), WPS device info (wash + tshark), full OUI database, wash chipset ID; confidence-ranked aggregation identifies APs even with randomized BSSIDs
+- **Vendor infrastructure recon** — classifies APs by manufacturer, identifies shared-physical-AP multi-SSID deployments, includes Meraki-specific sub-case for iPSK/firmware analysis
 - **Scope enforcement** — per-SSID active/passive mode scoping; passive SSIDs get monitoring only, no client attacks
 - **Monitor mode management** — airmon-ng primary with `iw` + `ip` fallback; enabled before assessment, disabled in `finally` block on any exit path
 - **AP discovery** — airodump-ng primary with iwlist fallback; SSID and BSSID filtering applied post-scan; channel and encryption type extracted per AP
@@ -226,13 +227,13 @@ Aether executes up to 25 phases in the order shown below. Each phase is independ
 |---|----------|-------|-----------|---------|---------|
 | 0-I | `p0_intel` | Wireless Intelligence | (always runs) | on | airodump-ng / iwlist |
 | 0-II | `p_ctx` | Contextual Intelligence | `contextual_intel` | on | (analysis) |
-| 0-III | `p_meraki` | Meraki Infrastructure Recon | `meraki_recon` | on | (analysis) |
+| 0-III | `p_meraki` | Vendor Reconnaissance | `vendor_recon` / `meraki_recon` | on | tshark / wash / (analysis) |
 
-**Phase 0-I: Wireless Intelligence** — Enumerates all APs broadcasting the target SSID(s), identifies connected clients, scores and selects the best target AP based on signal strength and client count. Vendor OUI lookup provides manufacturer context.
+**Phase 0-I: Wireless Intelligence** — Enumerates all APs broadcasting the target SSID(s), identifies connected clients, scores and selects the best target AP based on signal strength and client count. Vendor OUI lookup (52,000+ entries via nmap-mac-prefixes) provides manufacturer context. Beacon pcap is captured alongside CSV for IE and WPS extraction. LAA (Locally Administered Address) detection flags randomized BSSIDs where OUI lookup is unreliable.
 
-**Phase 0-II: Contextual Intelligence** — Emits informational findings for every observed AP, client, vendor, channel, and authentication type so the engagement report has full attribution regardless of which risk-graded findings subsequent phases produce.
+**Phase 0-II: Contextual Intelligence** — Emits informational findings for every observed AP, client, vendor, channel, and authentication type so the engagement report has full attribution regardless of which risk-graded findings subsequent phases produce. LAA BSSIDs generate dedicated findings. AP inventory includes fingerprint data, vendor IE OUIs, and WPS device info when available.
 
-**Phase 0-III: Meraki Infrastructure Recon** — Classifies APs, identifies shared-physical-AP multi-SSID deployments, and fingerprints firmware for Meraki/Cisco environments.
+**Phase 0-III: Vendor Reconnaissance** — Multi-method AP vendor/model identification. Extracts Vendor-Specific Information Elements from beacon frames (identifies real manufacturer even with randomized BSSIDs), WPS device info (manufacturer, model, serial via wash + tshark), OUI database lookup (for non-LAA BSSIDs), and wash chipset identification. Results are aggregated by confidence priority into `ap_fingerprints.json`. Includes Meraki-specific sub-case (AETHER-MERAKI-001/002/003) and shared-physical-AP multi-SSID detection. Accepts both `vendor_recon` and legacy `meraki_recon` config keys.
 
 ### WEP & WPA Cracking
 
@@ -381,7 +382,7 @@ Phase 7 contains three sub-phases:
     "post_connection":   false,
     "legacy_attacks":    true,
     "contextual_intel":  true,
-    "meraki_recon":      true,
+    "vendor_recon":      true,
     "server_cert_analysis":     true,
     "ipsk_test":                true,
     "captive_portal_test":      true,

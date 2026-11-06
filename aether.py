@@ -1984,14 +1984,228 @@ def disable_monitor_mode(monitor_iface: str, original_iface: str) -> None:
     log(f"Monitor mode disabled — {original_iface} restored to managed mode")
 
 
+# ── OUI database ─────────────────────────────────────────────────────────────
+
+_OUI_DB: dict | None = None
+
+_OUI_DB_PATHS = [
+    "/usr/local/share/nmap/nmap-mac-prefixes",
+    "/usr/share/nmap/nmap-mac-prefixes",
+    "/opt/homebrew/share/nmap/nmap-mac-prefixes",
+]
+
+
+def _load_oui_database() -> dict[str, str]:
+    """Load the full IEEE OUI database from nmap's nmap-mac-prefixes file.
+    Returns dict mapping 6-char uppercase hex OUI to vendor name.
+    Falls back to empty dict if file not found."""
+    global _OUI_DB
+    if _OUI_DB is not None:
+        return _OUI_DB
+    _OUI_DB = {}
+    # Try nmap's data directory first (resolve symlinks)
+    nmap_bin = shutil.which("nmap")
+    search_paths = list(_OUI_DB_PATHS)
+    if nmap_bin:
+        resolved = Path(nmap_bin).resolve()
+        candidate = resolved.parent.parent / "share" / "nmap" / "nmap-mac-prefixes"
+        if str(candidate) not in search_paths:
+            search_paths.insert(0, str(candidate))
+    for p in search_paths:
+        if os.path.isfile(p):
+            try:
+                with open(p, "r", encoding="utf-8", errors="replace") as fh:
+                    for line in fh:
+                        line = line.strip()
+                        if not line or line.startswith("#"):
+                            continue
+                        parts = line.split(None, 1)
+                        if len(parts) == 2 and len(parts[0]) == 6:
+                            try:
+                                int(parts[0], 16)
+                                _OUI_DB[parts[0].upper()] = parts[1]
+                            except ValueError:
+                                continue
+                if _OUI_DB:
+                    log(f"OUI database loaded: {len(_OUI_DB)} entries from {p}")
+                    return _OUI_DB
+            except Exception:
+                continue
+    if not _OUI_DB:
+        log("OUI database: nmap-mac-prefixes not found — using built-in table only")
+    return _OUI_DB
+
+
+def _is_laa(mac: str) -> bool:
+    """True if MAC is a Locally Administered Address (randomized BSSID).
+    Bit 1 of the first octet is the U/L bit — set means locally administered."""
+    if not mac or len(mac) < 2:
+        return False
+    try:
+        first_byte = int(mac.upper().replace(":", "").replace("-", "")[:2], 16)
+        return bool(first_byte & 0x02)
+    except (ValueError, IndexError):
+        return False
+
+
+# ── Vendor-Specific IE and WPS tshark extraction ─────────────────────────────
+
+_VENDOR_IE_OUI_MAP: dict[str, str] = {
+    "00:18:0a": "Cisco-Meraki",
+    "00:0b:86": "Aruba-HPE",
+    "00:40:96": "Cisco",
+    "00:1f:41": "Ruckus",
+    "00:09:0f": "Fortinet",
+    "00:03:7f": "Atheros-Qualcomm",
+    "00:10:18": "Broadcom",
+    "00:17:f2": "Apple",
+    "00:50:f2": "Microsoft-WMM",
+    "00:26:86": "Quantenna",
+    "00:24:6c": "Meru-Fortinet",
+    "00:13:92": "Ruckus",
+    "00:1a:1e": "Aruba-HPE",
+    "00:0c:e7": "MediaTek",
+    "00:26:c6": "Intel",
+    "00:90:4c": "Epigram-Broadcom",
+}
+
+
+def _extract_vendor_ies_from_pcap(pcap_path: str | Path) -> dict[str, list[str]]:
+    """Extract Vendor-Specific IE OUI bytes from beacon/probe-response frames.
+    Returns {BSSID: [oui_hex, ...]} where oui_hex is lowercase colon-separated."""
+    pcap_path = str(pcap_path)
+    if not os.path.isfile(pcap_path) or not shutil.which("tshark"):
+        return {}
+    result: dict[str, list[str]] = {}
+    try:
+        out, rc = _run([
+            "tshark", "-r", pcap_path, "-n",
+            "-Y", "wlan.fc.type_subtype == 0x08 || wlan.fc.type_subtype == 0x05",
+            "-T", "fields",
+            "-e", "wlan.bssid",
+            "-e", "wlan.tag.vendor.oui.type",
+            "-E", "separator=\t",
+        ], timeout=30)
+        if rc != 0 or not out:
+            return result
+        for line in out.strip().splitlines():
+            parts = line.split("\t")
+            if len(parts) < 2:
+                continue
+            bssid = parts[0].strip().upper()
+            oui_field = parts[1].strip()
+            if not bssid or not oui_field:
+                continue
+            ouis = [o.strip().lower() for o in oui_field.split(",") if o.strip()]
+            if bssid not in result:
+                result[bssid] = []
+            for o in ouis:
+                if o and o not in result[bssid]:
+                    result[bssid].append(o)
+    except Exception:
+        pass
+    return result
+
+
+def _extract_wps_device_info(pcap_path: str | Path) -> dict[str, dict]:
+    """Extract WPS device info (manufacturer, model) from probe responses.
+    Returns {BSSID: {manufacturer, model_name, model_number, device_name, serial}}."""
+    pcap_path = str(pcap_path)
+    if not os.path.isfile(pcap_path) or not shutil.which("tshark"):
+        return {}
+    result: dict[str, dict] = {}
+    try:
+        out, rc = _run([
+            "tshark", "-r", pcap_path, "-n",
+            "-Y", "wps",
+            "-T", "fields",
+            "-e", "wlan.bssid",
+            "-e", "wps.manufacturer",
+            "-e", "wps.model_name",
+            "-e", "wps.model_number",
+            "-e", "wps.device_name",
+            "-e", "wps.serial_number",
+            "-E", "separator=\t",
+        ], timeout=30)
+        if rc != 0 or not out:
+            return result
+        for line in out.strip().splitlines():
+            parts = line.split("\t")
+            if not parts or not parts[0].strip():
+                continue
+            bssid = parts[0].strip().upper()
+            info = {}
+            if len(parts) > 1 and parts[1].strip():
+                info["manufacturer"] = parts[1].strip()
+            if len(parts) > 2 and parts[2].strip():
+                info["model_name"] = parts[2].strip()
+            if len(parts) > 3 and parts[3].strip():
+                info["model_number"] = parts[3].strip()
+            if len(parts) > 4 and parts[4].strip():
+                info["device_name"] = parts[4].strip()
+            if len(parts) > 5 and parts[5].strip():
+                info["serial_number"] = parts[5].strip()
+            if info and (bssid not in result or len(info) > len(result[bssid])):
+                result[bssid] = info
+    except Exception:
+        pass
+    return result
+
+
+def _aggregate_ap_fingerprint(ap: dict) -> dict:
+    """Merge all identification sources into a single fingerprint dict.
+    Priority: WPS manufacturer > VS IE OUI > OUI database > wash vendor."""
+    fp = {"vendor": "Unknown", "model": "", "confidence": "none", "method": "",
+          "laa": ap.get("laa", False)}
+
+    # Lowest priority: wash WPS chipset vendor
+    wps_data = ap.get("wps_data") or {}
+    if wps_data.get("wps_vendor"):
+        fp["vendor"] = wps_data["wps_vendor"]
+        fp["confidence"] = "low"
+        fp["method"] = "wash-chipset"
+
+    # Medium: OUI database (only meaningful if not LAA)
+    if not fp["laa"] and ap.get("vendor", "Unknown") != "Unknown":
+        fp["vendor"] = ap["vendor"]
+        if ap.get("product_line"):
+            fp["model"] = ap["product_line"]
+        fp["confidence"] = "medium"
+        fp["method"] = "oui-database"
+
+    # High: Vendor-Specific IE OUI bytes from beacons
+    ie_ouis = ap.get("vendor_ie_ouis") or []
+    for oui in ie_ouis:
+        vendor = _VENDOR_IE_OUI_MAP.get(oui)
+        if vendor and vendor != "Microsoft-WMM":
+            fp["vendor"] = vendor
+            fp["confidence"] = "high"
+            fp["method"] = "vendor-ie"
+            break
+
+    # Highest: WPS device info (explicit manufacturer/model declaration)
+    wps_info = ap.get("wps_info") or {}
+    if wps_info.get("manufacturer"):
+        fp["vendor"] = wps_info["manufacturer"]
+        fp["confidence"] = "highest"
+        fp["method"] = "wps-device-info"
+    if wps_info.get("model_name"):
+        fp["model"] = wps_info["model_name"]
+    elif wps_info.get("device_name"):
+        fp["model"] = wps_info["device_name"]
+
+    return fp
+
+
 # ── WPS detection ─────────────────────────────────────────────────────────────
 
-def _detect_wps(monitor_iface: str, timeout: int = 20) -> set[str]:
-    """Run wash to enumerate WPS-enabled APs. Returns set of uppercase BSSIDs."""
+def _detect_wps(monitor_iface: str, timeout: int = 20) -> dict[str, dict]:
+    """Run wash to enumerate WPS-enabled APs.
+    Returns dict keyed by uppercase BSSID with WPS metadata per AP."""
     if not shutil.which("wash"):
-        return set()
+        return {}
     log(f"WPS scan (wash) on {monitor_iface} for {timeout}s...")
-    wps_bssids: set[str] = set()
+    wps_aps: dict[str, dict] = {}
     proc = None
     try:
         proc = _popen(
@@ -1999,23 +2213,40 @@ def _detect_wps(monitor_iface: str, timeout: int = 20) -> set[str]:
             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
         )
         if proc.stdout is None:
-            return wps_bssids
+            return wps_aps
         deadline = time.time() + timeout
         while True:
             line = _readline_timed(proc.stdout, deadline)
             if line is None:
                 break
             decoded = line.decode("utf-8", errors="replace").strip()
-            # wash output columns: BSSID  Ch  dBm  WPS  Lck  Vendor  ESSID
-            m = re.match(r'^([0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){5})', decoded)
+            # wash output: BSSID  Ch  dBm  WPS  Lck  Vendor  ESSID
+            m = re.match(
+                r'^([0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){5})\s+'  # BSSID
+                r'(\d+)\s+'                                       # Ch
+                r'(-?\d+)\s+'                                     # dBm
+                r'(\S+)\s+'                                       # WPS version
+                r'(\S+)\s+'                                       # Locked
+                r'(\S+)\s+'                                       # Vendor/chipset
+                r'(.*)',                                           # ESSID
+                decoded)
             if m:
-                wps_bssids.add(m.group(1).upper())
+                bssid = m.group(1).upper()
+                wps_aps[bssid] = {
+                    "wps_version": m.group(4),
+                    "locked": m.group(5).upper() == "YES",
+                    "wps_vendor": m.group(6).strip(),
+                }
+            elif not m:
+                m2 = re.match(r'^([0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){5})', decoded)
+                if m2:
+                    wps_aps[m2.group(1).upper()] = {}
     except Exception:
         pass
     finally:
         if proc is not None:
             _kill_proc(proc)
-    return wps_bssids
+    return wps_aps
 
 
 # ── Target AP scanning ────────────────────────────────────────────────────────
@@ -2385,8 +2616,8 @@ def phase_wireless_intel(
         log(f"[0-I] Targeting SSID(s): {', '.join(repr(s) for s in target_ssids)}")
 
     # WPS detection runs in parallel
-    wps_bssids: set[str] = set()
-    wps_proc             = None
+    wps_aps: dict[str, dict] = {}
+    wps_proc                 = None
     if shutil.which("wash"):
         try:
             wps_proc = _popen(["sudo", "wash", "-i", monitor_iface, "-C"],
@@ -2398,7 +2629,7 @@ def phase_wireless_intel(
     cmd = [
         "sudo", "airodump-ng",
         "--write", out_prefix,
-        "--output-format", "csv",
+        "--output-format", "csv,pcap",
         "--write-interval", "5",
         "--band", "abg",
     ]
@@ -2423,9 +2654,21 @@ def phase_wireless_intel(
         try:
             remaining, _ = wps_proc.communicate(timeout=3)
             for ln in remaining.decode("utf-8", errors="replace").splitlines():
-                m = re.match(r'^([0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){5})', ln.strip())
+                decoded = ln.strip()
+                m = re.match(
+                    r'^([0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){5})\s+'
+                    r'(\d+)\s+(-?\d+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(.*)',
+                    decoded)
                 if m:
-                    wps_bssids.add(m.group(1).upper())
+                    wps_aps[m.group(1).upper()] = {
+                        "wps_version": m.group(4),
+                        "locked": m.group(5).upper() == "YES",
+                        "wps_vendor": m.group(6).strip(),
+                    }
+                else:
+                    m2 = re.match(r'^([0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){5})', decoded)
+                    if m2:
+                        wps_aps[m2.group(1).upper()] = {}
         except Exception:
             _kill_proc(wps_proc)
 
@@ -2445,7 +2688,10 @@ def phase_wireless_intel(
         ssid_ok  = (not target_ssids)     or (ap["ssid"] in target_ssids)
         bssid_ok = (not target_bssids_up) or (ap["bssid"].upper() in target_bssids_up)
         if ssid_ok and bssid_ok:
-            ap["wps"] = ap["bssid"].upper() in wps_bssids
+            _bssid_up = ap["bssid"].upper()
+            ap["wps"] = _bssid_up in wps_aps
+            if ap["wps"] and wps_aps[_bssid_up]:
+                ap["wps_data"] = wps_aps[_bssid_up]
             filtered.append(ap)
 
     if not filtered:
@@ -2477,7 +2723,7 @@ def phase_wireless_intel(
             pfx2  = str(intel_dir / f"targeted_{i}")
             cmd2  = [
                 "sudo", "airodump-ng",
-                "--write", pfx2, "--output-format", "csv",
+                "--write", pfx2, "--output-format", "csv,pcap",
                 "--bssid",   ap["bssid"],
                 "--channel", str(ap["channel"]),
                 monitor_iface,
@@ -2550,6 +2796,31 @@ def phase_wireless_intel(
             f"score={ap['score']}{tag}")
         for c in ap["clients"]:
             log(f"      ↳ {c['mac']}  sig={c['signal']}dBm  pkts={c['packets']}")
+
+    # ── Pcap-based enrichment (VS IEs + WPS device info) ────────────────
+    pcap_file = out_prefix + "-01.cap"
+    if os.path.isfile(pcap_file) and shutil.which("tshark"):
+        log("[0-I] Extracting vendor IEs and WPS device info from pcap…")
+        ie_map = _extract_vendor_ies_from_pcap(pcap_file)
+        wps_dev_map = _extract_wps_device_info(pcap_file)
+        bssid_index_up = {ap["bssid"].upper(): ap for ap in filtered}
+        for bssid_up, ie_ouis in ie_map.items():
+            if bssid_up in bssid_index_up:
+                bssid_index_up[bssid_up]["vendor_ie_ouis"] = ie_ouis
+        for bssid_up, wps_info in wps_dev_map.items():
+            if bssid_up in bssid_index_up:
+                bssid_index_up[bssid_up]["wps_info"] = wps_info
+        _ie_count = sum(1 for ap in filtered if ap.get("vendor_ie_ouis"))
+        _wps_count = sum(1 for ap in filtered if ap.get("wps_info"))
+        log(f"[0-I] Pcap enrichment: {_ie_count} AP(s) with vendor IEs, "
+            f"{_wps_count} with WPS device info")
+    else:
+        if not os.path.isfile(pcap_file):
+            log("[0-I] No pcap file found — skipping VS IE / WPS extraction")
+
+    # Mark LAA (Locally Administered Address) BSSIDs
+    for ap in filtered:
+        ap["laa"] = _is_laa(ap["bssid"])
 
     # Persist to access_points.json (read by Crucible Access Points tab)
     ap_json_path = output_dir / "access_points.json"
@@ -5770,10 +6041,10 @@ def run(config: dict, project: str) -> None:
         if phases_cfg.get("contextual_intel", True):
             phase_contextual_intel(enriched_aps, output_dir)
 
-        # Phase 0-III: Meraki Infrastructure Recon — classify APs, identify
-        # shared-physical-AP multi-SSID deployments, fingerprint firmware.
-        if phases_cfg.get("meraki_recon", True):
-            phase_meraki_recon(enriched_aps, output_dir)
+        # Phase 0-III: Vendor Recon — classify AP vendors via OUI, VS IEs,
+        # WPS device info; includes Meraki sub-case and multi-SSID detection.
+        if phases_cfg.get("vendor_recon", True) or phases_cfg.get("meraki_recon", True):
+            phase_vendor_recon(enriched_aps, output_dir)
 
         # Narrow subsequent phases to the best-scored AP when user has not
         # specified an explicit BSSID — reduces false-positive capture and
@@ -6183,9 +6454,10 @@ def _startup_tool_check() -> None:
 # ═══════════════════════════════════════════════════════════════════════════
 
 # ── Vendor OUI table for AP / client device classification ────────────────
-# Each entry: 24-bit OUI prefix (upper, no separators) → (vendor, product_line)
-# Meraki acquired by Cisco; both Cisco-Meraki and pre-acquisition Meraki
-# entries listed. Expand as needed; missing OUIs fall through to "Unknown".
+# Curated table with product-line detail for known enterprise wireless vendors.
+# For all other OUIs, the full nmap-mac-prefixes database (52K+ entries) is
+# loaded at runtime via _load_oui_database(). This table takes precedence so
+# curated product_line info is preserved.
 _OUI_TABLE: dict[str, tuple] = {
     # Cisco-Meraki APs
     "00180A": ("Cisco-Meraki", "MR / MX / MS series"),
@@ -6195,28 +6467,55 @@ _OUI_TABLE: dict[str, tuple] = {
     "984FEE": ("Cisco-Meraki", "MR / MS series"),
     "0CC47A": ("Cisco-Meraki", "MR series"),
     "E45D37": ("Cisco-Meraki", "MR series"),
-    # Other common enterprise vendors (informational)
+    # Cisco
     "001C57": ("Cisco", "Catalyst / Aironet"),
+    "00270D": ("Cisco", "Aironet"),
+    # Apple
     "002608": ("Apple", "iPhone / iPad"),
+    # Aruba-HPE
     "78D294": ("Aruba-HPE", "Instant / IAP series"),
     "D8B190": ("Aruba-HPE", "AP series"),
     "001D7E": ("Aruba-HPE", "AP series"),
+    # Ubiquiti
     "0C7196": ("Ubiquiti", "UniFi AP"),
     "F09FC2": ("Ubiquiti", "UniFi AP"),
     "FCECDA": ("Ubiquiti", "UniFi AP"),
     "00D02D": ("Ubiquiti", "UniFi AP"),
-    "00270D": ("Cisco", "Aironet"),
+    "18E829": ("Ubiquiti", "UniFi AP"),
+    "245A4C": ("Ubiquiti", "UniFi AP"),
+    "802AA8": ("Ubiquiti", "UniFi AP"),
+    "788A20": ("Ubiquiti", "UniFi / EdgeRouter"),
+    # Mikrotik
     "DCCE41": ("Mikrotik", "RouterBOARD"),
-    "E48D8C": ("Routerboard", "Mikrotik"),
+    "E48D8C": ("Mikrotik", "RouterBOARD"),
+    # Ruckus
+    "001F41": ("Ruckus", "ZoneFlex / Unleashed"),
+    "EC8CA2": ("Ruckus", "ZoneFlex / Unleashed"),
+    "C4E984": ("Ruckus", "ZoneFlex / Unleashed"),
+    # Fortinet
+    "000907": ("Fortinet", "FortiAP"),
+    "70188B": ("Fortinet", "FortiGate / FortiAP"),
+    # TP-Link
+    "5091E3": ("TP-Link", "EAP / Omada"),
+    "B0A7B9": ("TP-Link", "EAP / Omada"),
 }
 
 
 def _oui_lookup(mac: str) -> tuple:
-    """Return (vendor, product_line) for the MAC's OUI, or ('Unknown', '')."""
+    """Return (vendor, product_line) for the MAC's OUI.
+    Checks curated table first (preserves product_line), falls back to
+    nmap-mac-prefixes database (52K+ entries), then ('Unknown', '')."""
     if not mac or len(mac) < 8:
         return ("Unknown", "")
     norm = mac.upper().replace(":", "").replace("-", "")[:6]
-    return _OUI_TABLE.get(norm, ("Unknown", ""))
+    hit = _OUI_TABLE.get(norm)
+    if hit:
+        return hit
+    db = _load_oui_database()
+    vendor = db.get(norm)
+    if vendor:
+        return (vendor, "")
+    return ("Unknown", "")
 
 
 def _is_meraki_ap(bssid: str, vendor_ies: str = "") -> bool:
@@ -6294,6 +6593,8 @@ def phase_contextual_intel(enriched_aps: list, output_dir: Path) -> None:
         vendor, line = _oui_lookup(bssid)
         auth_type = _classify_auth_type(enc, auth)
         is_meraki = _is_meraki_ap(bssid, ap.get("vendor_ies", ""))
+        laa = ap.get("laa", _is_laa(bssid))
+        fingerprint = _aggregate_ap_fingerprint(ap)
 
         # Per-AP catalog
         ap_data = {
@@ -6301,9 +6602,14 @@ def phase_contextual_intel(enriched_aps: list, output_dir: Path) -> None:
             "auth": auth, "auth_type": auth_type, "power": pwr,
             "vendor": vendor, "product_line": line,
             "is_meraki": is_meraki,
+            "laa": laa,
+            "vendor_ie_ouis": ap.get("vendor_ie_ouis", []),
+            "wps_info": ap.get("wps_info"),
+            "wps_data": ap.get("wps_data"),
+            "fingerprint": fingerprint,
         }
         inventory["aps"].append(ap_data)
-        inventory["vendors"].add(vendor)
+        inventory["vendors"].add(fingerprint["vendor"] if fingerprint["vendor"] != "Unknown" else vendor)
         inventory["auth_types"].add(auth_type)
         inventory["channels"].add(str(ch))
         inventory["ssids"].add(ssid)
@@ -6327,6 +6633,13 @@ def phase_contextual_intel(enriched_aps: list, output_dir: Path) -> None:
                              data={"bssid": bssid, "vendor": vendor, "product_line": line},
                              output_file=str(ctx_dir / "inventory.json"),
                              title_override="Discovery: Wireless Vendors Identified (Inventory)")
+
+        if laa:
+            finding_from_cat("AETHER-INFO-LAA",
+                             data={"bssid": bssid, "ssid": ssid,
+                                   "first_octet_hex": bssid.replace(":", "")[:2]},
+                             output_file=str(ctx_dir / "inventory.json"),
+                             title_override="Discovery: Locally Administered (Randomized) BSSIDs Detected")
 
         finding_from_cat("AETHER-INFO-CHANNEL",
                          data={"bssid": bssid, "ssid": ssid, "channel": ch},
@@ -6385,59 +6698,88 @@ def phase_contextual_intel(enriched_aps: list, output_dir: Path) -> None:
            f"{len(snapshot['aps'])} APs cataloged")
 
 
-# ── Phase: Meraki Infrastructure Recon ────────────────────────────────────
+# ── Phase: Vendor Recon (generalized from Meraki-only) ───────────────────
 
-def phase_meraki_recon(enriched_aps: list, output_dir: Path) -> None:
-    """Identify Meraki APs, classify product line by vendor IE, attempt
-    firmware fingerprinting, detect shared-BSSID multi-SSID deployments."""
+def phase_vendor_recon(enriched_aps: list, output_dir: Path) -> None:
+    """Identify AP vendors via VS IEs, WPS device info, and OUI database.
+    Includes all original Meraki-specific logic as a sub-case, plus generic
+    vendor identification for all other manufacturers."""
     _check_pause()
-    status("p_meraki", "Phase 0-III: Meraki Infrastructure Reconnaissance", "running")
-    log(f"[0-III] START: Meraki Infrastructure Reconnaissance — scanning {len(enriched_aps or [])} AP(s)")
-    meraki_dir = output_dir / "meraki_recon"
-    meraki_dir.mkdir(exist_ok=True)
+    status("p_meraki", "Phase 0-III: Vendor Reconnaissance", "running")
+    log(f"[0-III] START: Vendor Reconnaissance — fingerprinting {len(enriched_aps or [])} AP(s)")
+    recon_dir = output_dir / "vendor_recon"
+    recon_dir.mkdir(exist_ok=True)
 
     meraki_aps = []
+    identified_aps = []
     bssid_to_ssids: dict = {}
+
     for ap in enriched_aps or []:
         bssid = ap.get("bssid", "")
+        ssid = ap.get("ssid", "")
+        fp = _aggregate_ap_fingerprint(ap)
+
+        if bssid:
+            bssid_to_ssids.setdefault(bssid, []).append(ssid)
+
+        # ── Meraki sub-case (preserves existing AETHER-MERAKI-* findings) ──
         if _is_meraki_ap(bssid, ap.get("vendor_ies", "")):
             meraki_aps.append(ap)
-        # Track multi-SSID per BSSID (Meraki AP serving many SSIDs on one radio)
-        if bssid:
-            bssid_to_ssids.setdefault(bssid, []).append(ap.get("ssid", ""))
+            vendor, product_line = _oui_lookup(bssid)
+            finding_from_cat("AETHER-MERAKI-001",
+                             data={"bssid": bssid, "ssid": ssid, "vendor": vendor,
+                                   "product_line": product_line,
+                                   "channel": ap.get("channel", "")},
+                             output_file=str(recon_dir / "vendor_inventory.json"),
+                             title_override=f"Discovery: Meraki AP Identified: {ssid!r} [{bssid}] ({product_line})")
+            ies = ap.get("vendor_ies", "") or ap.get("rsn_ie", "") or ""
+            if ies:
+                finding_from_cat("AETHER-MERAKI-002",
+                                 data={"bssid": bssid, "ssid": ssid,
+                                       "vendor_ies_excerpt": str(ies)[:200]},
+                                 output_file=str(recon_dir / "vendor_inventory.json"),
+                                 title_override=f"Discovery: Meraki Beacon IE Captured for Fingerprinting: {bssid}")
 
-    if not meraki_aps:
-        log("Meraki recon: no Meraki APs identified")
-        status("p_meraki", "Phase 0-III: Meraki Infrastructure Reconnaissance",
-               "complete", "no Meraki APs")
-        return
+        # ── Generic vendor IE identification ──────────────────────────────
+        ie_ouis = ap.get("vendor_ie_ouis") or []
+        for oui in ie_ouis:
+            ie_vendor = _VENDOR_IE_OUI_MAP.get(oui)
+            if ie_vendor and ie_vendor != "Microsoft-WMM" and "Meraki" not in ie_vendor:
+                finding_from_cat("AETHER-INFO-VS-IE",
+                                 data={"bssid": bssid, "ssid": ssid,
+                                       "ie_oui": oui, "vendor": ie_vendor},
+                                 output_file=str(recon_dir / "vendor_inventory.json"),
+                                 title_override="Discovery: Vendors Identified via Beacon Information Elements")
+                break
 
-    log(f"Meraki recon: {len(meraki_aps)} Meraki AP(s) identified")
-    for ap in meraki_aps:
-        bssid = ap.get("bssid", "")
-        ssid  = ap.get("ssid", "")
-        vendor, product_line = _oui_lookup(bssid)
-
-        finding_from_cat("AETHER-MERAKI-001",
-                         data={"bssid": bssid, "ssid": ssid, "vendor": vendor,
-                               "product_line": product_line,
-                               "channel": ap.get("channel", "")},
-                         output_file=str(meraki_dir / "meraki_inventory.json"),
-                         title_override=f"Discovery: Meraki AP Identified: {ssid!r} [{bssid}] ({product_line})")
-
-        # Best-effort firmware identification via beacon IE pattern matching
-        ies = ap.get("vendor_ies", "") or ap.get("rsn_ie", "") or ""
-        if ies:
-            finding_from_cat("AETHER-MERAKI-002",
+        # ── WPS device info ───────────────────────────────────────────────
+        wps_info = ap.get("wps_info") or {}
+        if wps_info.get("manufacturer") or wps_info.get("model_name"):
+            finding_from_cat("AETHER-INFO-WPS-DEVICE",
                              data={"bssid": bssid, "ssid": ssid,
-                                   "vendor_ies_excerpt": str(ies)[:200]},
-                             output_file=str(meraki_dir / "meraki_inventory.json"),
-                             title_override=f"Discovery: Meraki Beacon IE Captured for Fingerprinting: {bssid}")
+                                   "manufacturer": wps_info.get("manufacturer", ""),
+                                   "model_name": wps_info.get("model_name", ""),
+                                   "model_number": wps_info.get("model_number", ""),
+                                   "device_name": wps_info.get("device_name", ""),
+                                   "serial_number": wps_info.get("serial_number", "")},
+                             output_file=str(recon_dir / "vendor_inventory.json"),
+                             title_override="Discovery: WPS Device Information Extracted")
 
-    # Shared-physical-AP detection (multiple SSIDs per BSSID prefix)
+        # ── Aggregated fingerprint finding ────────────────────────────────
+        if fp["vendor"] != "Unknown":
+            identified_aps.append({"bssid": bssid, "ssid": ssid, **fp})
+            finding_from_cat("AETHER-INFO-AP-FINGERPRINT",
+                             data={"bssid": bssid, "ssid": ssid,
+                                   "vendor": fp["vendor"], "model": fp["model"],
+                                   "confidence": fp["confidence"],
+                                   "method": fp["method"], "laa": fp["laa"]},
+                             output_file=str(recon_dir / "ap_fingerprints.json"),
+                             title_override="Discovery: AP Manufacturers/Models Identified")
+
+    # ── Shared-physical-AP detection (multi-SSID per BSSID prefix) ────────
     bssid_prefix_groups: dict = {}
     for bssid in bssid_to_ssids:
-        prefix = bssid.upper().replace(":", "")[:8]  # 32-bit prefix
+        prefix = bssid.upper().replace(":", "")[:8]
         bssid_prefix_groups.setdefault(prefix, []).append(bssid)
 
     multi_ssid_aps = []
@@ -6454,23 +6796,34 @@ def phase_meraki_recon(enriched_aps: list, output_dir: Path) -> None:
                                  data={"bssid_prefix": prefix, "bssids": bssids,
                                        "ssids": ssids_on_prefix,
                                        "ssid_count": len(ssids_on_prefix)},
-                                 output_file=str(meraki_dir / "meraki_inventory.json"),
+                                 output_file=str(recon_dir / "vendor_inventory.json"),
                                  title_override=f"Wireless Misconfiguration: Multiple SSIDs on Shared Physical AP "
                                                 f"(prefix {prefix}): {', '.join(ssids_on_prefix)}")
 
-    (meraki_dir / "meraki_inventory.json").write_text(json.dumps({
+    # Persist vendor inventory and fingerprints
+    (recon_dir / "vendor_inventory.json").write_text(json.dumps({
         "meraki_aps": [{
             "bssid": ap.get("bssid", ""), "ssid": ap.get("ssid", ""),
             "channel": ap.get("channel", ""),
             "vendor": _oui_lookup(ap.get("bssid", ""))[0],
             "product_line": _oui_lookup(ap.get("bssid", ""))[1],
         } for ap in meraki_aps],
+        "identified_aps": identified_aps,
         "multi_ssid_aps": multi_ssid_aps,
     }, indent=2), encoding="utf-8")
 
-    log(f"[0-III] END: Meraki Recon — {len(meraki_aps)} Meraki AP(s), {len(multi_ssid_aps)} shared-radio group(s)")
-    status("p_meraki", "Phase 0-III: Meraki Infrastructure Reconnaissance",
-           "complete", f"{len(meraki_aps)} Meraki, {len(multi_ssid_aps)} shared")
+    if identified_aps:
+        (recon_dir / "ap_fingerprints.json").write_text(
+            json.dumps(identified_aps, indent=2), encoding="utf-8")
+
+    _id_count = len(identified_aps)
+    log(f"[0-III] END: Vendor Recon — {_id_count} AP(s) identified, "
+        f"{len(meraki_aps)} Meraki, {len(multi_ssid_aps)} shared-radio group(s)")
+    status("p_meraki", "Phase 0-III: Vendor Reconnaissance",
+           "complete", f"{_id_count} identified, {len(meraki_aps)} Meraki")
+
+
+phase_meraki_recon = phase_vendor_recon
 
 
 # ── Phase: EAP-TLS Server Certificate Analysis ────────────────────────────
