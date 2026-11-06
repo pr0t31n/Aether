@@ -505,6 +505,9 @@ _AETHER_MERGE_KEYS = {
                                   d.get("matched_vendor", ""),
                                   d.get("matched_model", ""),
                                   d.get("service", "")])),
+    "AETHER-LOW-PSK-AUTH":    lambda d: ("ssid", d.get("ssid", "")),
+    "AETHER-MEDIUM-WPA1":     lambda d: ("ssid", d.get("ssid", "")),
+    "AETHER-LOW-MSCHAPV2-CONFIG": lambda d: ("ssid", d.get("ssid", "")),
 }
 
 # Canonical merged-finding titles.  When a group merges, the title is
@@ -528,6 +531,9 @@ _AETHER_MERGED_TITLES = {
     "btm_hijack":             lambda d: f"Wireless Vulnerability: BSS Transition Management Hijack Successful on BSSID {d.get('bssid','')}",
     "AETHER-FW-PROTO":        lambda d: f"Protocol Vulnerability: {d.get('vuln_id', '')}",
     "AETHER-FW-DEFCRED":      lambda d: f"Default Credentials: {d.get('matched_vendor','')} {d.get('matched_model','')} — {d.get('service','')}",
+    "AETHER-LOW-PSK-AUTH":    lambda d: f"Wireless Configuration: Pre-Shared Key (PSK) Authentication in Use — SSID: {d.get('ssid','')}",
+    "AETHER-MEDIUM-WPA1":     lambda d: f"Wireless Configuration: Deprecated WPA (Version 1) Protocol in Use — SSID: {d.get('ssid','')}",
+    "AETHER-LOW-MSCHAPV2-CONFIG": lambda d: f"Wireless Configuration: Enterprise Network Uses PEAP/MSCHAPv2 — SSID: {d.get('ssid','')}",
 }
 
 
@@ -3636,6 +3642,11 @@ def phase_eaphammer(
                         output_file=str(cred_dir),
                         title_override=f"Wireless Vulnerability: WPA-Enterprise Credentials Captured: {ssid}",
                     )
+                    finding_from_cat(
+                        "AETHER-LOW-MSCHAPV2-CONFIG",
+                        data={"ssid": ssid, "bssid": bssid, "auth": auth},
+                        output_file=str(cred_dir),
+                    )
             _kill_proc(proc)
             out_file.write_text("\n".join(out_lines), encoding="utf-8")
         except Exception as exc:
@@ -6549,8 +6560,9 @@ def _is_meraki_ap(bssid: str, vendor_ies: str = "") -> bool:
 
 def _classify_auth_type(enc: str, auth: str) -> str:
     """Return a normalized authentication type label.
-    Values: OPEN | WEP | WPA2-PSK | WPA2-Enterprise | WPA3-SAE |
-            WPA3-Enterprise | WPA2/WPA3-Transition | iPSK-Suspected | Unknown"""
+    Values: OPEN | WEP | WPA-PSK | WPA2-PSK | WPA2-Enterprise |
+            WPA3-SAE | WPA3-Enterprise | WPA2/WPA3-Transition |
+            iPSK-Suspected | Unknown"""
     s = ((enc or "") + " " + (auth or "")).upper()
     if "WEP" in s and "WPA" not in s:
         return "WEP"
@@ -6560,10 +6572,15 @@ def _classify_auth_type(enc: str, auth: str) -> str:
         return "WPA3-Enterprise"
     if "WPA3" in s or "SAE" in s:
         return "WPA3-SAE"
-    if ("WPA2" in s or "WPA" in s) and ("MGT" in s or "EAP" in s or "ENTERPRISE" in s):
+    _has_wpa2 = "WPA2" in s
+    _has_wpa = "WPA" in s
+    _is_enterprise = "MGT" in s or "EAP" in s or "ENTERPRISE" in s
+    if (_has_wpa2 or _has_wpa) and _is_enterprise:
         return "WPA2-Enterprise"
-    if "WPA2" in s or "WPA" in s:
+    if _has_wpa2:
         return "WPA2-PSK"
+    if _has_wpa:
+        return "WPA-PSK"
     if "OPN" in s or "OPEN" in s or not s.strip():
         return "OPEN"
     return "Unknown"
@@ -6662,6 +6679,28 @@ def phase_contextual_intel(enriched_aps: list, output_dir: Path) -> None:
                          data={"bssid": bssid, "ssid": ssid, "channel": ch},
                          output_file=str(ctx_dir / "inventory.json"),
                          title_override="Discovery: Channel Allocations Observed (Inventory)")
+
+        if auth_type == "WPA2-PSK":
+            finding_from_cat(
+                "AETHER-LOW-PSK-AUTH",
+                data={"bssid": bssid, "ssid": ssid, "auth_type": auth_type,
+                      "encryption_raw": enc, "auth_raw": auth},
+                output_file=str(ctx_dir / "inventory.json"),
+            )
+
+        if auth_type == "WPA-PSK":
+            finding_from_cat(
+                "AETHER-MEDIUM-WPA1",
+                data={"bssid": bssid, "ssid": ssid, "auth_type": auth_type,
+                      "encryption_raw": enc, "auth_raw": auth},
+                output_file=str(ctx_dir / "inventory.json"),
+            )
+            finding_from_cat(
+                "AETHER-LOW-PSK-AUTH",
+                data={"bssid": bssid, "ssid": ssid, "auth_type": auth_type,
+                      "encryption_raw": enc, "auth_raw": auth},
+                output_file=str(ctx_dir / "inventory.json"),
+            )
 
         # Per-client catalog within this AP
         for client in (ap.get("clients") or []):
