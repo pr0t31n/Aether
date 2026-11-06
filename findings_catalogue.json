@@ -2,9 +2,9 @@
   "version": "1.7.0",
   "tool": "aether",
   "generated": "(complete: upgraded existing + scaffolded missing)",
-  "total": 75,
+  "total": 70,
   "from_existing": 34,
-  "newly_scaffolded": 5,
+  "newly_scaffolded": 0,
   "findings": [
     {
       "id": "AETHER-001",
@@ -134,7 +134,7 @@
     },
     {
       "id": "AETHER-004",
-      "title": "Wireless Vulnerability: WPA3 SAE Dragonblood \u2014 Invalid Curve Attack Confirmed",
+      "title": "Wireless Vulnerability: WPA3 SAE Dragonblood — Invalid Curve Attack Confirmed",
       "aliases": [],
       "source_tools": [
         "aether"
@@ -169,7 +169,7 @@
         "CVE-2019-9494",
         "CVE-2019-9495"
       ],
-      "description": "The target WPA3 SAE implementation accepted an invalid elliptic-curve point during the SAE Commit exchange (attack mode 1 \u2014 invalid curve). This is a variant of the Dragonblood vulnerability class disclosed by Mathy Vanhoef and Eyal Ronen. Exploitation allows an active attacker to trick the AP into performing computations on a weak curve, potentially leaking the password encoding and enabling offline dictionary attacks against WPA3 networks that were intended to be resistant to such attacks.",
+      "description": "The target WPA3 SAE implementation accepted an invalid elliptic-curve point during the SAE Commit exchange (attack mode 1 — invalid curve). This is a variant of the Dragonblood vulnerability class disclosed by Mathy Vanhoef and Eyal Ronen. Exploitation allows an active attacker to trick the AP into performing computations on a weak curve, potentially leaking the password encoding and enabling offline dictionary attacks against WPA3 networks that were intended to be resistant to such attacks.",
       "impact": "",
       "_x_severity": "HIGH",
       "_x_category": "WPA3 SAE Dragonblood",
@@ -182,7 +182,7 @@
     },
     {
       "id": "AETHER-005",
-      "title": "Wireless Vulnerability: WPA3 SAE Dragonblood \u2014 Reflection Attack Confirmed",
+      "title": "Wireless Vulnerability: WPA3 SAE Dragonblood — Reflection Attack Confirmed",
       "aliases": [],
       "source_tools": [
         "aether"
@@ -228,7 +228,7 @@
     },
     {
       "id": "AETHER-006",
-      "title": "Wireless Vulnerability: WPA3 SAE Dragonblood \u2014 Secondary Invalid Curve Attack Confirmed",
+      "title": "Wireless Vulnerability: WPA3 SAE Dragonblood — Secondary Invalid Curve Attack Confirmed",
       "aliases": [],
       "source_tools": [
         "aether"
@@ -280,7 +280,7 @@
     },
     {
       "id": "AETHER-007",
-      "title": "Wireless Vulnerability: WPA3 SAE Dragonblood \u2014 Zero-Scalar Attack Confirmed",
+      "title": "Wireless Vulnerability: WPA3 SAE Dragonblood — Zero-Scalar Attack Confirmed",
       "aliases": [],
       "source_tools": [
         "aether"
@@ -307,7 +307,7 @@
       "searchsploit_terms": [],
       "metasploit_modules": [],
       "kev": false,
-      "remediation_brief": "Apply vendor firmware updates addressing CVE-2019-9500 through CVE-2019-9502. The AP must validate that received scalar values are within the valid range (1 \u2264 scalar < order) and reject any Commit message with a scalar of zero or order.",
+      "remediation_brief": "Apply vendor firmware updates addressing CVE-2019-9500 through CVE-2019-9502. The AP must validate that received scalar values are within the valid range (1 ≤ scalar < order) and reject any Commit message with a scalar of zero or order.",
       "remediation_component": "",
       "remediation_category": "",
       "remediation_effort": "",
@@ -316,11 +316,11 @@
         "CVE-2019-9501",
         "CVE-2019-9502"
       ],
-      "description": "The target WPA3 SAE implementation accepted a SAE Commit message with a zero scalar value (attack mode 3). Sending a scalar of zero forces the resulting shared key to be zero or a trivially predictable value, potentially allowing an attacker to authenticate without the actual PSK. This is a variant of the Dragonblood flaw class (CVE-2019-9500\u20139502).",
+      "description": "The target WPA3 SAE implementation accepted a SAE Commit message with a zero scalar value (attack mode 3). Sending a scalar of zero forces the resulting shared key to be zero or a trivially predictable value, potentially allowing an attacker to authenticate without the actual PSK. This is a variant of the Dragonblood flaw class (CVE-2019-9500–9502).",
       "impact": "",
       "_x_severity": "HIGH",
       "_x_category": "WPA3 SAE Dragonblood",
-      "_x_remediation": "Apply vendor firmware updates addressing CVE-2019-9500 through CVE-2019-9502. The AP must validate that received scalar values are within the valid range (1 \u2264 scalar < order) and reject any Commit message with a scalar of zero or order.",
+      "_x_remediation": "Apply vendor firmware updates addressing CVE-2019-9500 through CVE-2019-9502. The AP must validate that received scalar values are within the valid range (1 ≤ scalar < order) and reject any Commit message with a scalar of zero or order.",
       "_x_references": [
         "CVE-2019-9500",
         "CVE-2019-9501",
@@ -376,7 +376,7 @@
     },
     {
       "id": "AETHER-009",
-      "title": "Wireless Vulnerability: WPA2 KRACK Vulnerability \u2014 Standard 4-Way Handshake Reinstallation",
+      "title": "Wireless Vulnerability: WPA2 KRACK Vulnerability — Standard 4-Way Handshake Reinstallation",
       "aliases": [],
       "source_tools": [
         "aether"
@@ -424,7 +424,7 @@
     },
     {
       "id": "AETHER-010",
-      "title": "Wireless Vulnerability: WPA2 KRACK Vulnerability \u2014 TPTK Variant",
+      "title": "Wireless Vulnerability: WPA2 KRACK Vulnerability — TPTK Variant",
       "aliases": [],
       "source_tools": [
         "aether"
@@ -472,7 +472,7 @@
     },
     {
       "id": "AETHER-011",
-      "title": "Wireless Vulnerability: WPA2 KRACK Vulnerability \u2014 Group Key Reinstallation",
+      "title": "Wireless Vulnerability: WPA2 KRACK Vulnerability — Group Key Reinstallation",
       "aliases": [],
       "source_tools": [
         "aether"
@@ -547,7 +547,7 @@
       "searchsploit_terms": [],
       "metasploit_modules": [],
       "kev": false,
-      "remediation_brief": "Immediately replace WEP with WPA3-Personal (SAE) or at minimum WPA2-Personal (CCMP/AES). WEP cannot be patched \u2014 upgrade the AP firmware or replace the device. Segment any WEP-only legacy devices onto an isolated VLAN with no access to sensitive resources until they can be replaced.",
+      "remediation_brief": "Immediately replace WEP with WPA3-Personal (SAE) or at minimum WPA2-Personal (CCMP/AES). WEP cannot be patched — upgrade the AP firmware or replace the device. Segment any WEP-only legacy devices onto an isolated VLAN with no access to sensitive resources until they can be replaced.",
       "remediation_component": "",
       "remediation_category": "",
       "remediation_effort": "",
@@ -556,11 +556,11 @@
         "IEEE 802.11i-2004",
         "PTW Attack (Pyshkin, Tews, Weinmann 2007)"
       ],
-      "description": "The target network uses WEP (Wired Equivalent Privacy), which has been cryptographically broken since 2001 (CVE-2001-0309). The RC4 stream cipher reuses 24-bit initialisation vectors (IVs), allowing the FMS, KoreK, and PTW statistical attacks to recover any WEP key from roughly 50 000 captured frames \u2014 achievable in under a minute on an active network. An attacker within radio range can decrypt all traffic and authenticate as a legitimate station. WEP was deprecated by IEEE 802.11i in 2004 and formally withdrawn. No patch exists; the protocol must be replaced.",
+      "description": "The target network uses WEP (Wired Equivalent Privacy), which has been cryptographically broken since 2001 (CVE-2001-0309). The RC4 stream cipher reuses 24-bit initialisation vectors (IVs), allowing the FMS, KoreK, and PTW statistical attacks to recover any WEP key from roughly 50 000 captured frames — achievable in under a minute on an active network. An attacker within radio range can decrypt all traffic and authenticate as a legitimate station. WEP was deprecated by IEEE 802.11i in 2004 and formally withdrawn. No patch exists; the protocol must be replaced.",
       "impact": "",
       "_x_severity": "HIGH",
       "_x_category": "Legacy Wireless Encryption",
-      "_x_remediation": "Immediately replace WEP with WPA3-Personal (SAE) or at minimum WPA2-Personal (CCMP/AES). WEP cannot be patched \u2014 upgrade the AP firmware or replace the device. Segment any WEP-only legacy devices onto an isolated VLAN with no access to sensitive resources until they can be replaced.",
+      "_x_remediation": "Immediately replace WEP with WPA3-Personal (SAE) or at minimum WPA2-Personal (CCMP/AES). WEP cannot be patched — upgrade the AP firmware or replace the device. Segment any WEP-only legacy devices onto an isolated VLAN with no access to sensitive resources until they can be replaced.",
       "_x_references": [
         "CVE-2001-0309",
         "IEEE 802.11i-2004",
@@ -708,7 +708,7 @@
     },
     {
       "id": "AETHER-016",
-      "title": "Wireless Vulnerability: WPA3 Transition Mode \u2014 Downgrade Attack Surface",
+      "title": "Wireless Vulnerability: WPA3 Transition Mode — Downgrade Attack Surface",
       "aliases": [],
       "source_tools": [
         "aether"
@@ -735,7 +735,7 @@
       "searchsploit_terms": [],
       "metasploit_modules": [],
       "kev": false,
-      "remediation_brief": "Migrate to WPA3-only mode when all client devices support WPA3-SAE. In the interim, enable 802.11w (PMF) as mandatory \u2014 this prevents deauthentication-based downgrade forcing. Audit which clients cannot support WPA3 and establish a remediation timeline. Consider a separate SSID for legacy WPA2 clients rather than running mixed mode on the primary SSID.",
+      "remediation_brief": "Migrate to WPA3-only mode when all client devices support WPA3-SAE. In the interim, enable 802.11w (PMF) as mandatory — this prevents deauthentication-based downgrade forcing. Audit which clients cannot support WPA3 and establish a remediation timeline. Consider a separate SSID for legacy WPA2 clients rather than running mixed mode on the primary SSID.",
       "remediation_component": "",
       "remediation_category": "",
       "remediation_effort": "",
@@ -747,7 +747,7 @@
       "_x_severity": "MEDIUM",
       "_x_cvss_score": 7.5,
       "_x_category": "WPA3 Downgrade",
-      "_x_remediation": "Migrate to WPA3-only mode when all client devices support WPA3-SAE. In the interim, enable 802.11w (PMF) as mandatory \u2014 this prevents deauthentication-based downgrade forcing. Audit which clients cannot support WPA3 and establish a remediation timeline. Consider a separate SSID for legacy WPA2 clients rather than running mixed mode on the primary SSID.",
+      "_x_remediation": "Migrate to WPA3-only mode when all client devices support WPA3-SAE. In the interim, enable 802.11w (PMF) as mandatory — this prevents deauthentication-based downgrade forcing. Audit which clients cannot support WPA3 and establish a remediation timeline. Consider a separate SSID for legacy WPA2 clients rather than running mixed mode on the primary SSID.",
       "_x_references": [
         "CVE-2019-9494"
       ]
@@ -846,7 +846,7 @@
     },
     {
       "id": "AETHER-019",
-      "title": "Wireless Vulnerability: Rogue AP \u2014 Clients Associated to Evil Twin",
+      "title": "Wireless Vulnerability: Rogue AP — Clients Associated to Evil Twin",
       "aliases": [],
       "source_tools": [
         "aether"
@@ -889,7 +889,7 @@
     },
     {
       "id": "AETHER-020",
-      "title": "Wireless Vulnerability: Rogue AP \u2014 WPA Pre-Shared Key Phished via Captive Portal",
+      "title": "Wireless Vulnerability: Rogue AP — WPA Pre-Shared Key Phished via Captive Portal",
       "aliases": [],
       "source_tools": [
         "aether"
@@ -932,7 +932,7 @@
     },
     {
       "id": "AETHER-021",
-      "title": "Wireless Vulnerability: KARMA / MANA Attack \u2014 Client Credentials Captured",
+      "title": "Wireless Vulnerability: KARMA / MANA Attack — Client Credentials Captured",
       "aliases": [],
       "source_tools": [
         "aether"
@@ -1061,7 +1061,7 @@
     },
     {
       "id": "AETHER-024",
-      "title": "Wireless Vulnerability: Client Probe Request Harvest \u2014 Remembered Network Disclosure",
+      "title": "Wireless Vulnerability: Client Probe Request Harvest — Remembered Network Disclosure",
       "aliases": [],
       "source_tools": [
         "aether"
@@ -1088,7 +1088,7 @@
       "searchsploit_terms": [],
       "metasploit_modules": [],
       "kev": false,
-      "remediation_brief": "Configure devices to send only directed probe requests to specific APs rather than broadcast probes for all remembered networks. Modern operating systems with MAC randomisation also suppress SSID disclosure in probes \u2014 ensure this feature is enabled. Remove outdated or low-trust networks from device preferred network lists.",
+      "remediation_brief": "Configure devices to send only directed probe requests to specific APs rather than broadcast probes for all remembered networks. Modern operating systems with MAC randomisation also suppress SSID disclosure in probes — ensure this feature is enabled. Remove outdated or low-trust networks from device preferred network lists.",
       "remediation_component": "",
       "remediation_category": "",
       "remediation_effort": "",
@@ -1098,13 +1098,13 @@
       "_x_catalogue_id": "probe_harvest",
       "_x_severity": "LOW",
       "_x_category": "Privacy / Information Disclosure",
-      "_x_remediation": "Configure devices to send only directed probe requests to specific APs rather than broadcast probes for all remembered networks. Modern operating systems with MAC randomisation also suppress SSID disclosure in probes \u2014 ensure this feature is enabled. Remove outdated or low-trust networks from device preferred network lists.",
+      "_x_remediation": "Configure devices to send only directed probe requests to specific APs rather than broadcast probes for all remembered networks. Modern operating systems with MAC randomisation also suppress SSID disclosure in probes — ensure this feature is enabled. Remove outdated or low-trust networks from device preferred network lists.",
       "_x_references": [],
       "_x_cvss_score": 3.7
     },
     {
       "id": "AETHER-025",
-      "title": "Wireless Vulnerability: EAP Downgrade \u2014 Weak EAP Method Credentials Captured",
+      "title": "Wireless Vulnerability: EAP Downgrade — Weak EAP Method Credentials Captured",
       "aliases": [],
       "source_tools": [
         "aether"
@@ -1147,7 +1147,7 @@
     },
     {
       "id": "AETHER-026",
-      "title": "Wireless Vulnerability: SAE Transition Mode \u2014 WPA2 Downgrade Attack Surface",
+      "title": "Wireless Vulnerability: SAE Transition Mode — WPA2 Downgrade Attack Surface",
       "aliases": [],
       "source_tools": [
         "aether"
@@ -1190,7 +1190,7 @@
     },
     {
       "id": "AETHER-027",
-      "title": "Network Misconfiguration: ARP Cache Poisoning \u2014 MITM Position Established",
+      "title": "Network Misconfiguration: ARP Cache Poisoning — MITM Position Established",
       "aliases": [],
       "source_tools": [
         "aether"
@@ -1233,7 +1233,7 @@
     },
     {
       "id": "AETHER-028",
-      "title": "Uncategorized: LLMNR / NBT-NS Poisoning \u2014 NTLMv2 Hashes Captured",
+      "title": "Uncategorized: LLMNR / NBT-NS Poisoning — NTLMv2 Hashes Captured",
       "aliases": [],
       "source_tools": [
         "aether"
@@ -1260,7 +1260,7 @@
       "searchsploit_terms": [],
       "metasploit_modules": [],
       "kev": false,
-      "remediation_brief": "Disable LLMNR via Group Policy: Computer Configuration \u2192 Administrative Templates \u2192 Network \u2192 DNS Client \u2192 Turn Off Multicast Name Resolution = Enabled. Disable NBT-NS via WINS settings on the IPv4 adapter: disable NetBIOS over TCP/IP. Implement SMB signing to prevent NTLM relay attacks. Monitor for and alert on unexpected LLMNR/NBT-NS query responses.",
+      "remediation_brief": "Disable LLMNR via Group Policy: Computer Configuration → Administrative Templates → Network → DNS Client → Turn Off Multicast Name Resolution = Enabled. Disable NBT-NS via WINS settings on the IPv4 adapter: disable NetBIOS over TCP/IP. Implement SMB signing to prevent NTLM relay attacks. Monitor for and alert on unexpected LLMNR/NBT-NS query responses.",
       "remediation_component": "",
       "remediation_category": "",
       "remediation_effort": "",
@@ -1270,7 +1270,7 @@
       "_x_catalogue_id": "llmnr_hashes",
       "_x_severity": "HIGH",
       "_x_category": "Post-Connection / Credential Capture",
-      "_x_remediation": "Disable LLMNR via Group Policy: Computer Configuration \u2192 Administrative Templates \u2192 Network \u2192 DNS Client \u2192 Turn Off Multicast Name Resolution = Enabled. Disable NBT-NS via WINS settings on the IPv4 adapter: disable NetBIOS over TCP/IP. Implement SMB signing to prevent NTLM relay attacks. Monitor for and alert on unexpected LLMNR/NBT-NS query responses.",
+      "_x_remediation": "Disable LLMNR via Group Policy: Computer Configuration → Administrative Templates → Network → DNS Client → Turn Off Multicast Name Resolution = Enabled. Disable NBT-NS via WINS settings on the IPv4 adapter: disable NetBIOS over TCP/IP. Implement SMB signing to prevent NTLM relay attacks. Monitor for and alert on unexpected LLMNR/NBT-NS query responses.",
       "_x_references": [],
       "_x_cvss_score": 8.0
     },
@@ -1303,7 +1303,7 @@
       "searchsploit_terms": [],
       "metasploit_modules": [],
       "kev": false,
-      "remediation_brief": "Implement network segmentation: place the wireless network in a dedicated VLAN with firewall rules restricting access to internal services. Apply the principle of least privilege \u2014 wireless clients should only be able to reach services required for their function. Disable unnecessary services on hosts and implement host-based firewalls.",
+      "remediation_brief": "Implement network segmentation: place the wireless network in a dedicated VLAN with firewall rules restricting access to internal services. Apply the principle of least privilege — wireless clients should only be able to reach services required for their function. Disable unnecessary services on hosts and implement host-based firewalls.",
       "remediation_component": "",
       "remediation_category": "",
       "remediation_effort": "",
@@ -1313,7 +1313,7 @@
       "_x_catalogue_id": "internal_hosts",
       "_x_severity": "INFO",
       "_x_category": "Post-Connection / Network Discovery",
-      "_x_remediation": "Implement network segmentation: place the wireless network in a dedicated VLAN with firewall rules restricting access to internal services. Apply the principle of least privilege \u2014 wireless clients should only be able to reach services required for their function. Disable unnecessary services on hosts and implement host-based firewalls.",
+      "_x_remediation": "Implement network segmentation: place the wireless network in a dedicated VLAN with firewall rules restricting access to internal services. Apply the principle of least privilege — wireless clients should only be able to reach services required for their function. Disable unnecessary services on hosts and implement host-based firewalls.",
       "_x_references": [],
       "_x_cvss_score": 0.0
     },
@@ -1346,7 +1346,7 @@
       "searchsploit_terms": [],
       "metasploit_modules": [],
       "kev": false,
-      "remediation_brief": "Disable TKIP and require CCMP (AES) as the only permitted pairwise cipher. Set rsn_pairwise=CCMP and wpa_pairwise=CCMP in hostapd configuration, or equivalent settings in the AP's admin interface. Remove WPA1/TKIP-only client support \u2014 all modern clients support CCMP.",
+      "remediation_brief": "Disable TKIP and require CCMP (AES) as the only permitted pairwise cipher. Set rsn_pairwise=CCMP and wpa_pairwise=CCMP in hostapd configuration, or equivalent settings in the AP's admin interface. Remove WPA1/TKIP-only client support — all modern clients support CCMP.",
       "remediation_component": "",
       "remediation_category": "",
       "remediation_effort": "",
@@ -1356,13 +1356,13 @@
       "_x_catalogue_id": "tkip_detected",
       "_x_severity": "MEDIUM",
       "_x_category": "Legacy / Deprecated Encryption",
-      "_x_remediation": "Disable TKIP and require CCMP (AES) as the only permitted pairwise cipher. Set rsn_pairwise=CCMP and wpa_pairwise=CCMP in hostapd configuration, or equivalent settings in the AP's admin interface. Remove WPA1/TKIP-only client support \u2014 all modern clients support CCMP.",
+      "_x_remediation": "Disable TKIP and require CCMP (AES) as the only permitted pairwise cipher. Set rsn_pairwise=CCMP and wpa_pairwise=CCMP in hostapd configuration, or equivalent settings in the AP's admin interface. Remove WPA1/TKIP-only client support — all modern clients support CCMP.",
       "_x_references": [],
       "_x_cvss_score": 5.9
     },
     {
       "id": "AETHER-031",
-      "title": "Wireless Vulnerability: TKIP ChopChop / Fragmentation Attack \u2014 Packet Decryption Confirmed",
+      "title": "Wireless Vulnerability: TKIP ChopChop / Fragmentation Attack — Packet Decryption Confirmed",
       "aliases": [],
       "source_tools": [
         "aether"
@@ -1448,7 +1448,7 @@
     },
     {
       "id": "AETHER-033",
-      "title": "Wireless Vulnerability: Wi-Fi Direct WPS PIN Cracked \u2014 Device Compromised",
+      "title": "Wireless Vulnerability: Wi-Fi Direct WPS PIN Cracked — Device Compromised",
       "aliases": [],
       "source_tools": [
         "aether"
@@ -1562,7 +1562,7 @@
         "dig"
       ],
       "description": "Unauthenticated clients on the open SSID can resolve arbitrary hostnames via external DNS resolvers (e.g. 1.1.1.1, 8.8.8.8) before completing captive portal authentication. The portal is enforcing only at the HTTP/HTTPS layer.",
-      "impact": "DNS leakage pre-auth is the foundation for DNS tunneling (iodine, dnscat2) \u2014 an attacker can establish a full-duplex tunnel encapsulating arbitrary IP traffic in DNS queries, completely bypassing the portal's billing, AAA, and content controls. Often invisible to the portal vendor's logging because DNS query payloads are not inspected.",
+      "impact": "DNS leakage pre-auth is the foundation for DNS tunneling (iodine, dnscat2) — an attacker can establish a full-duplex tunnel encapsulating arbitrary IP traffic in DNS queries, completely bypassing the portal's billing, AAA, and content controls. Often invisible to the portal vendor's logging because DNS query payloads are not inspected.",
       "_x_catalogue_id": "AETHER-CAP-DNS-EXTERNAL",
       "_x_severity": "HIGH",
       "_x_category": "Captive Portal / Access Control"
@@ -1788,7 +1788,7 @@
       "searchsploit_terms": [],
       "metasploit_modules": [],
       "kev": false,
-      "remediation_brief": "HTTPS bypass is harder for portals to intercept than HTTP because TLS cannot be transparently redirected \u2014 block port 443 outbound from the unauthenticated VLAN entirely until authentication completes. Inspect the captive portal vendor's documentation for the 'block all egress until auth' or 'pre-authentication firewall mode' setting.",
+      "remediation_brief": "HTTPS bypass is harder for portals to intercept than HTTP because TLS cannot be transparently redirected — block port 443 outbound from the unauthenticated VLAN entirely until authentication completes. Inspect the captive portal vendor's documentation for the 'block all egress until auth' or 'pre-authentication firewall mode' setting.",
       "remediation_component": "Network",
       "remediation_category": "Access Control",
       "remediation_effort": "Easy",
@@ -1863,7 +1863,7 @@
       "searchsploit_terms": [],
       "metasploit_modules": [],
       "kev": false,
-      "remediation_brief": "Apply identical pre-authentication filtering rules to BOTH IPv4 and IPv6 traffic on the guest VLAN. Many captive portal vendors only filter IPv4 by default \u2014 IPv6 advertisements (RAs) leak the v6 prefix to clients which then route around the portal entirely. Either: (a) disable IPv6 on the guest VLAN (RA Guard + suppress RAs), or (b) deploy matching ip6tables/PBR rules. PCI-DSS 4.0 \u00a71.4.5 explicitly requires controls on all network protocols including IPv6.",
+      "remediation_brief": "Apply identical pre-authentication filtering rules to BOTH IPv4 and IPv6 traffic on the guest VLAN. Many captive portal vendors only filter IPv4 by default — IPv6 advertisements (RAs) leak the v6 prefix to clients which then route around the portal entirely. Either: (a) disable IPv6 on the guest VLAN (RA Guard + suppress RAs), or (b) deploy matching ip6tables/PBR rules. PCI-DSS 4.0 §1.4.5 explicitly requires controls on all network protocols including IPv6.",
       "remediation_component": "Network",
       "remediation_category": "Access Control",
       "remediation_effort": "Moderate",
@@ -1872,7 +1872,7 @@
         "curl"
       ],
       "description": "Direct outbound traffic over IPv6 succeeded from an unauthenticated client on the open SSID, while IPv4 traffic was (or would have been) intercepted by the captive portal. This is the classic dual-stack misconfiguration: the portal filters v4 only.",
-      "impact": "The portal's entire access control model is bypassed via IPv6. Unauthenticated clients have full internet access without billing, AAA, or content controls \u2014 only via v6. Often invisible in portal vendor consoles that report v4-only statistics. Because v6 connectivity to major content destinations (Cloudflare, Google, Apple, AWS) is widely available, this is a fully practical bypass.",
+      "impact": "The portal's entire access control model is bypassed via IPv6. Unauthenticated clients have full internet access without billing, AAA, or content controls — only via v6. Often invisible in portal vendor consoles that report v4-only statistics. Because v6 connectivity to major content destinations (Cloudflare, Google, Apple, AWS) is widely available, this is a fully practical bypass.",
       "_x_catalogue_id": "AETHER-CAP-IPV6",
       "_x_severity": "HIGH",
       "_x_category": "Captive Portal / Access Control"
@@ -1919,201 +1919,6 @@
       "_x_remediation": "Enforce captive portal controls at the IP layer rather than relying solely on DNS. Block all outbound DNS except to the captive portal resolver. Implement MAC address validation in conjunction with IP binding and session tokens. Use HTTPS for the captive portal itself to prevent credential interception.",
       "_x_references": [],
       "_x_cvss_score": 5.3
-    },
-    {
-      "id": "AE-001",
-      "title": "Wireless Misconfiguration: Multiple APs Broadcasting SSID: {ssid_label}",
-      "aliases": [],
-      "source_tools": [
-        "aether"
-      ],
-      "risk": "MEDIUM",
-      "cwe": [],
-      "cve_examples": [],
-      "cvss_v3_base": null,
-      "cvss_vector": "",
-      "nessus_plugin_ids": [],
-      "qualys_qids": [],
-      "owasp_web": "",
-      "owasp_api": "",
-      "nist_csf2": [],
-      "nist_800_53": [],
-      "nist_800_171": [],
-      "pci_dss_4": [],
-      "iso_27001": [],
-      "iso_27002": [],
-      "soc2": [],
-      "hitrust": [],
-      "gdpr": [],
-      "mitre_attack": [],
-      "searchsploit_terms": [],
-      "metasploit_modules": [],
-      "kev": false,
-      "remediation_brief": "",
-      "remediation_component": "",
-      "remediation_category": "",
-      "remediation_effort": "",
-      "validation_tools": [],
-      "description": "",
-      "impact": "",
-      "_scaffold_from": "aether.py:1495",
-      "_template": true
-    },
-    {
-      "id": "AE-002",
-      "title": "Wireless Vulnerability: WPA Handshake / PMKID Captured: {ssid}",
-      "aliases": [],
-      "source_tools": [
-        "aether"
-      ],
-      "risk": "HIGH",
-      "cwe": [],
-      "cve_examples": [],
-      "cvss_v3_base": null,
-      "cvss_vector": "",
-      "nessus_plugin_ids": [],
-      "qualys_qids": [],
-      "owasp_web": "",
-      "owasp_api": "",
-      "nist_csf2": [],
-      "nist_800_53": [],
-      "nist_800_171": [],
-      "pci_dss_4": [],
-      "iso_27001": [],
-      "iso_27002": [],
-      "soc2": [],
-      "hitrust": [],
-      "gdpr": [],
-      "mitre_attack": [],
-      "searchsploit_terms": [],
-      "metasploit_modules": [],
-      "kev": false,
-      "remediation_brief": "",
-      "remediation_component": "",
-      "remediation_category": "",
-      "remediation_effort": "",
-      "validation_tools": [],
-      "description": "",
-      "impact": "",
-      "_scaffold_from": "aether.py:2046",
-      "_template": true
-    },
-    {
-      "id": "AE-003",
-      "title": "Wireless Vulnerability: WPA Pre-Shared Key Cracked via Deauth: {ssid}",
-      "aliases": [],
-      "source_tools": [
-        "aether"
-      ],
-      "risk": "CRITICAL",
-      "cwe": [],
-      "cve_examples": [],
-      "cvss_v3_base": null,
-      "cvss_vector": "",
-      "nessus_plugin_ids": [],
-      "qualys_qids": [],
-      "owasp_web": "",
-      "owasp_api": "",
-      "nist_csf2": [],
-      "nist_800_53": [],
-      "nist_800_171": [],
-      "pci_dss_4": [],
-      "iso_27001": [],
-      "iso_27002": [],
-      "soc2": [],
-      "hitrust": [],
-      "gdpr": [],
-      "mitre_attack": [],
-      "searchsploit_terms": [],
-      "metasploit_modules": [],
-      "kev": false,
-      "remediation_brief": "",
-      "remediation_component": "",
-      "remediation_category": "",
-      "remediation_effort": "",
-      "validation_tools": [],
-      "description": "",
-      "impact": "",
-      "_scaffold_from": "aether.py:1679",
-      "_template": true
-    },
-    {
-      "id": "AE-004",
-      "title": "Wireless Vulnerability: WPA Pre-Shared Key Cracked: {ssid}",
-      "aliases": [],
-      "source_tools": [
-        "aether"
-      ],
-      "risk": "CRITICAL",
-      "cwe": [],
-      "cve_examples": [],
-      "cvss_v3_base": null,
-      "cvss_vector": "",
-      "nessus_plugin_ids": [],
-      "qualys_qids": [],
-      "owasp_web": "",
-      "owasp_api": "",
-      "nist_csf2": [],
-      "nist_800_53": [],
-      "nist_800_171": [],
-      "pci_dss_4": [],
-      "iso_27001": [],
-      "iso_27002": [],
-      "soc2": [],
-      "hitrust": [],
-      "gdpr": [],
-      "mitre_attack": [],
-      "searchsploit_terms": [],
-      "metasploit_modules": [],
-      "kev": false,
-      "remediation_brief": "",
-      "remediation_component": "",
-      "remediation_category": "",
-      "remediation_effort": "",
-      "validation_tools": [],
-      "description": "",
-      "impact": "",
-      "_scaffold_from": "aether.py:2032",
-      "_template": true
-    },
-    {
-      "id": "AE-005",
-      "title": "Wireless Vulnerability: WPS PIN / Pixie Dust Succeeded: {ssid}",
-      "aliases": [],
-      "source_tools": [
-        "aether"
-      ],
-      "risk": "HIGH",
-      "cwe": [],
-      "cve_examples": [],
-      "cvss_v3_base": null,
-      "cvss_vector": "",
-      "nessus_plugin_ids": [],
-      "qualys_qids": [],
-      "owasp_web": "",
-      "owasp_api": "",
-      "nist_csf2": [],
-      "nist_800_53": [],
-      "nist_800_171": [],
-      "pci_dss_4": [],
-      "iso_27001": [],
-      "iso_27002": [],
-      "soc2": [],
-      "hitrust": [],
-      "gdpr": [],
-      "mitre_attack": [],
-      "searchsploit_terms": [],
-      "metasploit_modules": [],
-      "kev": false,
-      "remediation_brief": "",
-      "remediation_component": "",
-      "remediation_category": "",
-      "remediation_effort": "",
-      "validation_tools": [],
-      "description": "",
-      "impact": "",
-      "_scaffold_from": "aether.py:2056",
-      "_template": true
     },
     {
       "id": "AETHER-CERT-001",
@@ -2238,7 +2043,7 @@
       "validation_tools": [
         "aether"
       ],
-      "description": "The RADIUS server certificate is self-signed (Subject == Issuer) or issued by a CA not present in the standard public root store. While valid for internal deployments, this requires every client to be explicitly configured to trust the specific cert or CA \u2014 a common misconfiguration vector.",
+      "description": "The RADIUS server certificate is self-signed (Subject == Issuer) or issued by a CA not present in the standard public root store. While valid for internal deployments, this requires every client to be explicitly configured to trust the specific cert or CA — a common misconfiguration vector.",
       "impact": "Clients with poor cert-validation configuration (\"Trust Any Certificate\" or no CA pin) will accept ANY self-signed cert presented by a rogue authenticator. Evil-twin attacks become trivially successful."
     },
     {
@@ -2279,7 +2084,7 @@
       "validation_tools": [
         "aether"
       ],
-      "description": "The Issuer field of the RADIUS server certificate contains terms suggesting an internal Certificate Authority (e.g., CN=corp-CA-01, CN=AD-CA, CN=Internal-Root). This is informational reconnaissance value \u2014 it confirms the existence and naming convention of an internal PKI.",
+      "description": "The Issuer field of the RADIUS server certificate contains terms suggesting an internal Certificate Authority (e.g., CN=corp-CA-01, CN=AD-CA, CN=Internal-Root). This is informational reconnaissance value — it confirms the existence and naming convention of an internal PKI.",
       "impact": "An attacker learns the internal CA naming convention, which feeds into Active Directory / network-topology reconnaissance. Combined with other findings (cert SAN disclosure, EAP identity leakage) the attacker maps the corporate auth infrastructure without authenticated access."
     },
     {
@@ -2391,7 +2196,7 @@
       "searchsploit_terms": [],
       "metasploit_modules": [],
       "kev": false,
-      "remediation_brief": "No action required \u2014 informational only. Cross-reference with findings AETHER-CERT-001 through AETHER-CERT-006 for the grading outcome.",
+      "remediation_brief": "No action required — informational only. Cross-reference with findings AETHER-CERT-001 through AETHER-CERT-006 for the grading outcome.",
       "remediation_component": "Wireless",
       "remediation_category": "Documentation",
       "remediation_effort": "n/a",
@@ -2433,7 +2238,7 @@
       "searchsploit_terms": [],
       "metasploit_modules": [],
       "kev": false,
-      "remediation_brief": "Configure all supplicants to use an anonymous outer identity. On Windows GPO: Wireless Network (IEEE 802.11) Policies \u2192 properties \u2192 Security \u2192 Settings \u2192 Advanced \u2192 Enable Identity Privacy. On Linux NetworkManager: anonymous_identity setting. On macOS / iOS: configure via MDM profile.",
+      "remediation_brief": "Configure all supplicants to use an anonymous outer identity. On Windows GPO: Wireless Network (IEEE 802.11) Policies → properties → Security → Settings → Advanced → Enable Identity Privacy. On Linux NetworkManager: anonymous_identity setting. On macOS / iOS: configure via MDM profile.",
       "remediation_component": "Wireless",
       "remediation_category": "Configuration",
       "remediation_effort": "Moderate",
@@ -2555,14 +2360,14 @@
       "searchsploit_terms": [],
       "metasploit_modules": [],
       "kev": false,
-      "remediation_brief": "No action required \u2014 informational only. Cross-reference with the Meraki advisory feed for the identified product line to verify the firmware in use is patched against known issues.",
+      "remediation_brief": "No action required — informational only. Cross-reference with the Meraki advisory feed for the identified product line to verify the firmware in use is patched against known issues.",
       "remediation_component": "Wireless",
       "remediation_category": "Documentation",
       "remediation_effort": "n/a",
       "validation_tools": [
         "aether"
       ],
-      "description": "One or more wireless APs in scope identified as Cisco-Meraki by MAC OUI prefix or vendor-specific IE pattern. Contextual recon \u2014 establishes the vendor / product family for the rest of the assessment.",
+      "description": "One or more wireless APs in scope identified as Cisco-Meraki by MAC OUI prefix or vendor-specific IE pattern. Contextual recon — establishes the vendor / product family for the rest of the assessment.",
       "impact": "Drives vendor-specific test selection (iPSK testing, Systems Manager enrollment recon, Meraki-specific firmware advisories cross-reference)."
     },
     {
@@ -2594,7 +2399,7 @@
       "searchsploit_terms": [],
       "metasploit_modules": [],
       "kev": false,
-      "remediation_brief": "No action \u2014 informational only.",
+      "remediation_brief": "No action — informational only.",
       "remediation_component": "Wireless",
       "remediation_category": "Configuration",
       "remediation_effort": "n/a",
@@ -2672,7 +2477,7 @@
       "searchsploit_terms": [],
       "metasploit_modules": [],
       "kev": false,
-      "remediation_brief": "No action \u2014 informational only.",
+      "remediation_brief": "No action — informational only.",
       "remediation_component": "Wireless",
       "remediation_category": "Configuration",
       "remediation_effort": "n/a",
@@ -2723,12 +2528,12 @@
       "validation_tools": [
         "aether"
       ],
-      "description": "On a Meraki SSID using Identity PSK (iPSK), the test confirmed that authentication is keyed primarily on MAC address \u2014 spoofing a known iPSK-issued MAC inherits the PSK assigned to the original device.",
+      "description": "On a Meraki SSID using Identity PSK (iPSK), the test confirmed that authentication is keyed primarily on MAC address — spoofing a known iPSK-issued MAC inherits the PSK assigned to the original device.",
       "impact": "An attacker who observes a single legitimate device's MAC address can clone the MAC and authenticate to the SSID using the inherited PSK without ever cracking it. Effectively eliminates the per-device PSK assumption."
     },
     {
       "id": "AETHER-IPSK-002",
-      "title": "Wireless Misconfiguration: iPSK Suspected \u2014 Per-Client PMKID Variance Observed",
+      "title": "Wireless Misconfiguration: iPSK Suspected — Per-Client PMKID Variance Observed",
       "aliases": [],
       "source_tools": [
         "aether"
@@ -2755,7 +2560,7 @@
       "searchsploit_terms": [],
       "metasploit_modules": [],
       "kev": false,
-      "remediation_brief": "No action \u2014 informational confirmation. Use as supporting evidence for AETHER-IPSK-001 and AETHER-IPSK-003 findings.",
+      "remediation_brief": "No action — informational confirmation. Use as supporting evidence for AETHER-IPSK-001 and AETHER-IPSK-003 findings.",
       "remediation_component": "Wireless",
       "remediation_category": "Configuration",
       "remediation_effort": "n/a",
@@ -2801,7 +2606,7 @@
       "validation_tools": [
         "aether"
       ],
-      "description": "An iPSK SSID shares a physical AP with a cert-authenticated SSID. The wireless infrastructure security posture is now bounded by the WEAKER of the two \u2014 if VLAN isolation is misconfigured, compromise of iPSK leads to access in the cert-auth segment's broadcast domain.",
+      "description": "An iPSK SSID shares a physical AP with a cert-authenticated SSID. The wireless infrastructure security posture is now bounded by the WEAKER of the two — if VLAN isolation is misconfigured, compromise of iPSK leads to access in the cert-auth segment's broadcast domain.",
       "impact": "The cert-auth SSID's strong authentication is only as effective as the network segmentation it sits behind. iPSK-derived access can become lateral movement opportunity."
     },
     {
@@ -2845,7 +2650,7 @@
     },
     {
       "id": "AETHER-SPLASH-002",
-      "title": "Captive Portal: Captive Portal DNS Bypass \u2014 External Resolution Pre-Auth",
+      "title": "Captive Portal: Captive Portal DNS Bypass — External Resolution Pre-Auth",
       "aliases": [],
       "source_tools": [
         "aether"
@@ -2888,7 +2693,7 @@
     },
     {
       "id": "AETHER-SPLASH-003",
-      "title": "Captive Portal: Captive Portal ICMP Bypass \u2014 External Echo Pre-Auth",
+      "title": "Captive Portal: Captive Portal ICMP Bypass — External Echo Pre-Auth",
       "aliases": [],
       "source_tools": [
         "aether"
@@ -2993,7 +2798,7 @@
       "searchsploit_terms": [],
       "metasploit_modules": [],
       "kev": false,
-      "remediation_brief": "No action \u2014 informational only.",
+      "remediation_brief": "No action — informational only.",
       "remediation_component": "Wireless",
       "remediation_category": "Documentation",
       "remediation_effort": "n/a",
@@ -3032,7 +2837,7 @@
       "searchsploit_terms": [],
       "metasploit_modules": [],
       "kev": false,
-      "remediation_brief": "No action \u2014 informational only.",
+      "remediation_brief": "No action — informational only.",
       "remediation_component": "Wireless",
       "remediation_category": "Documentation",
       "remediation_effort": "n/a",
@@ -3071,7 +2876,7 @@
       "searchsploit_terms": [],
       "metasploit_modules": [],
       "kev": false,
-      "remediation_brief": "No action \u2014 informational only.",
+      "remediation_brief": "No action — informational only.",
       "remediation_component": "Wireless",
       "remediation_category": "Configuration",
       "remediation_effort": "n/a",
@@ -3110,7 +2915,7 @@
       "searchsploit_terms": [],
       "metasploit_modules": [],
       "kev": false,
-      "remediation_brief": "No action \u2014 informational only. Review the auth type distribution across the deployment for consistency with the documented security architecture.",
+      "remediation_brief": "No action — informational only. Review the auth type distribution across the deployment for consistency with the documented security architecture.",
       "remediation_component": "Wireless",
       "remediation_category": "Configuration",
       "remediation_effort": "n/a",
@@ -3149,7 +2954,7 @@
       "searchsploit_terms": [],
       "metasploit_modules": [],
       "kev": false,
-      "remediation_brief": "No action \u2014 informational only.",
+      "remediation_brief": "No action — informational only.",
       "remediation_component": "Wireless",
       "remediation_category": "Configuration",
       "remediation_effort": "n/a",
@@ -3195,7 +3000,7 @@
       "validation_tools": [
         "aether"
       ],
-      "description": "A client device sent a probe request asking for a specific SSID. Probed SSIDs reveal the client's Preferred Network List \u2014 useful for Karma attacks and for assessing employees' personal device-to-corporate-network proximity.",
+      "description": "A client device sent a probe request asking for a specific SSID. Probed SSIDs reveal the client's Preferred Network List — useful for Karma attacks and for assessing employees' personal device-to-corporate-network proximity.",
       "impact": "Builds the input set for Karma-style opportunistic AP responses. Reveals corporate device usage patterns (e.g., probes for home networks, conference networks, partner-org networks)."
     },
     {
@@ -3264,7 +3069,7 @@
       "searchsploit_terms": [],
       "metasploit_modules": [],
       "kev": false,
-      "remediation_brief": "Standardise authentication mode across every AP broadcasting a given SSID. The strongest configured auth mode should be the only mode \u2014 a single AP using a weaker mode (e.g. WPA2-PSK on an SSID otherwise served by WPA3-SAE or WPA2-Enterprise) means an attacker can target the weaker AP for the same SSID name and bypass the stronger protections entirely. Audit the WLAN controller's per-AP policy bindings; verify intentional WPA2/WPA3 transition mode is configured uniformly rather than per-AP.",
+      "remediation_brief": "Standardise authentication mode across every AP broadcasting a given SSID. The strongest configured auth mode should be the only mode — a single AP using a weaker mode (e.g. WPA2-PSK on an SSID otherwise served by WPA3-SAE or WPA2-Enterprise) means an attacker can target the weaker AP for the same SSID name and bypass the stronger protections entirely. Audit the WLAN controller's per-AP policy bindings; verify intentional WPA2/WPA3 transition mode is configured uniformly rather than per-AP.",
       "remediation_component": "Wireless",
       "remediation_category": "Authentication",
       "remediation_effort": "Moderate",
@@ -3308,7 +3113,7 @@
       "searchsploit_terms": [],
       "metasploit_modules": [],
       "kev": false,
-      "remediation_brief": "No action \u2014 informational. Cross-reference with AETHER-EAPTLS-001 for the grading outcome.",
+      "remediation_brief": "No action — informational. Cross-reference with AETHER-EAPTLS-001 for the grading outcome.",
       "remediation_component": "Wireless",
       "remediation_category": "Configuration",
       "remediation_effort": "n/a",
