@@ -3457,7 +3457,12 @@
           "name": "Vulnerability Scanning"
         }
       ],
-      "searchsploit_terms": [],
+      "searchsploit_terms": [
+        "wireless firmware",
+        "access point vulnerability",
+        "router firmware",
+        "AP firmware RCE"
+      ],
       "metasploit_modules": [],
       "kev": false,
       "remediation_brief": "Update the access point firmware to a version that addresses the identified CVE(s). Verify the update by re-running vendor recon after the firmware upgrade. If the device is end-of-life with no available patch, replace the hardware with a supported model.",
@@ -3490,8 +3495,16 @@
       "cve_examples": [],
       "cvss_v3_base": 8.1,
       "cvss_vector": "CVSS:3.1/AV:A/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:N",
-      "nessus_plugin_ids": [],
-      "qualys_qids": [],
+      "nessus_plugin_ids": [
+        10264,
+        103239,
+        56997,
+        65057
+      ],
+      "qualys_qids": [
+        86000,
+        38174
+      ],
       "owasp_web": "",
       "owasp_api": "",
       "nist_csf2": [
@@ -3534,8 +3547,17 @@
           "name": "Password Guessing"
         }
       ],
-      "searchsploit_terms": [],
-      "metasploit_modules": [],
+      "searchsploit_terms": [
+        "default credentials",
+        "default password",
+        "factory credentials",
+        "wireless default login"
+      ],
+      "metasploit_modules": [
+        "auxiliary/scanner/ssh/ssh_login",
+        "auxiliary/scanner/http/http_login",
+        "auxiliary/scanner/snmp/snmp_login"
+      ],
       "kev": false,
       "remediation_brief": "Change all default credentials on the identified access point immediately. This includes SSH, web management, SNMP community strings, and any other administrative interface. Implement a credential management policy that requires unique, complex passwords for all network infrastructure devices.",
       "remediation_component": "Wireless",
@@ -3613,7 +3635,13 @@
           "name": "Network Sniffing"
         }
       ],
-      "searchsploit_terms": [],
+      "searchsploit_terms": [
+        "fragattacks",
+        "802.11 vulnerability",
+        "wifi protocol",
+        "KRACK",
+        "dragonblood"
+      ],
       "metasploit_modules": [],
       "kev": false,
       "remediation_brief": "Apply vendor firmware updates that address the protocol-level vulnerability. For design flaws in the 802.11 standard itself (e.g., FragAttacks), ensure all APs and clients are running firmware that implements the vendor's mitigation. Monitor vendor advisories for patches.",
