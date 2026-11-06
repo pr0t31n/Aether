@@ -3178,7 +3178,6 @@ def phase_wifite(
                 start_new_session=True,
             )
             os.close(_pty_slave)
-            os.close(_pty_master)
             try:
                 raw_out, _ = proc.communicate(timeout=wifite_deadline)
             except subprocess.TimeoutExpired:
@@ -3190,6 +3189,8 @@ def phase_wifite(
                 except Exception:
                     pass
                 raw_out, _ = proc.communicate()
+            finally:
+                os.close(_pty_master)
             out_lines = _strip_ansi(
                 raw_out.decode("utf-8", errors="replace")
             ).splitlines()
