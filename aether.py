@@ -386,8 +386,11 @@ def finding(title: str, severity: str, description: str,
         _d = {**_d, "auth_role": _ar}
     if "auth_username" not in _d and _au:
         _d = {**_d, "auth_username": _au}
-    _bssid = _d.get("bssid") or _d.get("BSSID") or ""
-    _ssid  = _d.get("ssid")  or _d.get("SSID")  or ""
+    _bssid = (_d.get("bssid") or _d.get("BSSID")
+              or _d.get("associated_bssid") or _d.get("seen_on_bssid")
+              or _d.get("ap_bssid") or "")
+    _ssid  = (_d.get("ssid") or _d.get("SSID")
+              or _d.get("associated_ssid") or _d.get("probed_ssid") or "")
     _cat_id = _d.get("catalogue_id", "")
     _src = f"Aether | {_cat_id}" if _cat_id else "Aether"
     if _ssid and _bssid:
