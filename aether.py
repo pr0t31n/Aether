@@ -190,6 +190,19 @@ def _load_catalogue() -> None:
 
 # ── In-process findings collector ────────────────────────────────────────────
 _findings_collected: list[dict] = []
+
+# ── Auth role tracking ────────────────────────────────────────────────────────
+# Findings carry auth_role (UNAUTHENTICATED/AUTHENTICATED) and auth_username
+# so Crucible can show role pills and filter by auth state.
+_auth_role: str = "UNAUTHENTICATED"
+_auth_username: str = ""
+
+def set_auth_state(role: str, username: str = "") -> None:
+    global _auth_role, _auth_username
+    _auth_role = role.upper()
+    _auth_username = username
+    log(f"[auth] State changed: role={_auth_role}"
+        + (f", username={_auth_username}" if _auth_username else ""))
 _RUN_DIR: Path | None = None
 _fdb = None
 
@@ -359,10 +372,20 @@ def _emit_run_log(cmd, started, ended, rc, stdout, stderr) -> None:
 
 def finding(title: str, severity: str, description: str,
             data: dict | None = None, output_file: str = "",
-            cvss_score: float | None = None, cvss_vector: str = "") -> None:
+            cvss_score: float | None = None, cvss_vector: str = "",
+            auth_role: str = "", auth_username: str = "") -> None:
+    _d = data or {}
+    if "category" not in _d and ":" in title:
+        _d = {**_d, "category": title.split(":", 1)[0].strip()}
+    _ar = auth_role or _d.get("auth_role") or _auth_role
+    _au = auth_username or _d.get("auth_username") or _auth_username
+    if "auth_role" not in _d:
+        _d = {**_d, "auth_role": _ar}
+    if "auth_username" not in _d and _au:
+        _d = {**_d, "auth_username": _au}
     rec = {
         "title": title, "severity": severity, "description": description,
-        "data": data or {}, "output_file": _aether_rel(output_file),
+        "data": _d, "output_file": _aether_rel(output_file),
         "ts": datetime.now().isoformat(),
     }
     if cvss_score is not None:
@@ -399,11 +422,14 @@ def finding_from_cat(cat_id: str, data: dict | None = None,
         cvss = entry.get("cvss_v3_base")
     if cvss is None:
         cvss = entry.get("_x_cvss_score")
+    _cat_title = title_override or entry.get("title", cat_id)
+    _cat_prefix = _cat_title.split(":", 1)[0].strip() if ":" in _cat_title else ""
     finding(
-        title=title_override or entry.get("title", cat_id),
+        title=_cat_title,
         severity=risk,
         description=entry.get("description", cat_id),
         data={**(data or {}), "catalogue_id": cat_id,
+              "category": _cat_prefix,
               "remediation": remediation},
         output_file=output_file,
         cvss_score=cvss,
@@ -451,16 +477,16 @@ _AETHER_MERGE_KEYS = {
 # can be built from multiple fields (e.g. auth-type groups keyed on a composite
 # signature still render a human-readable SSID + auth-type heading).
 _AETHER_MERGED_TITLES = {
-    "AETHER-INFO-AP":         lambda d: f"Wireless Access Points Observed on SSID: {d.get('ssid','')}",
-    "AETHER-INFO-AUTH-TYPE":  lambda d: f"Authentication Type Classified: {d.get('auth_type','')} (SSID: {d.get('ssid','')})",
-    "AETHER-INFO-CHANNEL":    lambda d: f"Channel Allocations Observed on SSID: {d.get('ssid','')}",
-    "AETHER-INFO-VENDOR":     lambda d: f"Wireless Vendor Identified: {d.get('vendor','')}",
-    "AETHER-INFO-CLIENT":     lambda d: f"Client Devices Observed on SSID: {d.get('associated_ssid','')} BSSID: {d.get('associated_bssid','')}",
-    "AETHER-INFO-PROBE":      lambda d: f"Client Probe Requests Observed on BSSID: {d.get('seen_on_bssid','')}",
-    "AETHER-022":             lambda d: f"PMF Not Required: Management Frames Unprotected on BSSID {d.get('bssid','')}",
-    "AETHER-023":             lambda d: f"BSS Transition Management Hijack Successful on BSSID {d.get('bssid','')}",
-    "pmf_not_enforced":       lambda d: f"PMF Not Required: Management Frames Unprotected on BSSID {d.get('bssid','')}",
-    "btm_hijack":             lambda d: f"BSS Transition Management Hijack Successful on BSSID {d.get('bssid','')}",
+    "AETHER-INFO-AP":         lambda d: f"Discovery: Wireless Access Points Observed on SSID: {d.get('ssid','')}",
+    "AETHER-INFO-AUTH-TYPE":  lambda d: f"Discovery: Authentication Type Classified: {d.get('auth_type','')} (SSID: {d.get('ssid','')})",
+    "AETHER-INFO-CHANNEL":    lambda d: f"Discovery: Channel Allocations Observed on SSID: {d.get('ssid','')}",
+    "AETHER-INFO-VENDOR":     lambda d: f"Discovery: Wireless Vendor Identified: {d.get('vendor','')}",
+    "AETHER-INFO-CLIENT":     lambda d: f"Discovery: Client Devices Observed on SSID: {d.get('associated_ssid','')} BSSID: {d.get('associated_bssid','')}",
+    "AETHER-INFO-PROBE":      lambda d: f"Discovery: Client Probe Requests Observed on BSSID: {d.get('seen_on_bssid','')}",
+    "AETHER-022":             lambda d: f"Wireless Misconfiguration: PMF Not Required: Management Frames Unprotected on BSSID {d.get('bssid','')}",
+    "AETHER-023":             lambda d: f"Wireless Vulnerability: BSS Transition Management Hijack Successful on BSSID {d.get('bssid','')}",
+    "pmf_not_enforced":       lambda d: f"Wireless Misconfiguration: PMF Not Required: Management Frames Unprotected on BSSID {d.get('bssid','')}",
+    "btm_hijack":             lambda d: f"Wireless Vulnerability: BSS Transition Management Hijack Successful on BSSID {d.get('bssid','')}",
 }
 
 
@@ -633,32 +659,44 @@ def _u_synthesize_outputs(output_dir: Path, native_findings: list) -> None:
                 affected = f"{ssid} ({bssid})" if ssid or bssid else ""
                 output_blob = json.dumps(data, indent=2)[:4096] if data else ""
 
+            _cat_id = data.get("catalogue_id", "") if isinstance(data, dict) else ""
+            _f_title = f.get("title", "")
+            _f_cat = data.get("category", "") if isinstance(data, dict) else ""
+            if not _f_cat and ":" in _f_title:
+                _f_cat = _f_title.split(":", 1)[0].strip()
+            _auth_role = data.get("auth_role", "UNAUTHENTICATED") if isinstance(data, dict) else "UNAUTHENTICATED"
+            _auth_user = data.get("auth_username", "") if isinstance(data, dict) else ""
+            _rem = data.get("remediation", "") if isinstance(data, dict) else ""
+            _src_parts = ["Aether"]
+            if _cat_id:
+                _src_parts.append(_cat_id)
+            _sources = " | ".join(_src_parts)
             mapped.append({
-                "title":       f.get("title", ""),
+                "title":       _f_title,
                 "datetime":    f.get("ts", ""),
-                # v1.1: ip/hostname/port reserved for actual network identity;
-                # wireless-specific data lives in ssid/bssid/wireless_data.
-                "ip":          "",
+                "ip":          bssid,
                 "port":        0,
-                "hostname":    "",
+                "hostname":    ssid,
                 "risk":        str(f.get("severity", "INFO")).upper(),
                 "command":     f.get("command", ""),
                 "description": f.get("description", ""),
                 "output":      output_blob,
                 "output_file": f.get("output_file", ""),
                 "cves":        ",".join(f.get("cves", []) or []),
-                "sources":     "aether",
+                "sources":     _sources,
                 "service":     "wifi",
                 "affected":    affected,
-                "remediation": f.get("remediation", "Review wireless configuration."),
+                "remediation": _rem or f.get("remediation", "Review wireless configuration."),
                 "owasp":       "", "owasp_url": "", "nist": "",
                 "exploitdb":   False, "metasploit": False, "exploit_details": [],
-                # v1.1 enrichment
+                "category":    _f_cat,
                 "ssid":          ssid,
                 "bssid":         bssid,
                 "wireless_data": {**data, "channel": _ch_int} if data else {},
                 "cvss_score":    f.get("cvss_score"),
                 "cvss_vector":   f.get("cvss_vector", ""),
+                "auth_role":     _auth_role,
+                "auth_username": _auth_user,
             })
         n = _us.write_universal_findings(output_dir, mapped,
                                           tool="aether", scope=None, phase="")
@@ -1042,8 +1080,8 @@ def _detect_mixed_auth_per_ssid(aps: list) -> None:
                 ],
             },
             title_override=(
-                f"Inconsistent Auth Modes for SSID '{ssid}' — "
-                f"{len(weak_aps)} AP(s) using weaker auth"
+                f"Authentication: Inconsistent Auth Modes for SSID '{ssid}' — "
+                f"{len(weak_aps)} AP(s) Using Weaker Auth"
             ),
         )
 
@@ -2140,7 +2178,7 @@ def scan_targets(
             finding_from_cat(
                 "AETHER-014",
                 data={"ssid": ssid, "bssid": ap["bssid"], "channel": ap["channel"]},
-                title_override=f"Open / Unencrypted Network: {ssid}",
+                title_override=f"Wireless Misconfiguration: Open / Unencrypted Network: {ssid}",
             )
 
         # WPS enabled — exposes AP to Pixie-Dust and PIN brute-force
@@ -2148,7 +2186,7 @@ def scan_targets(
             finding_from_cat(
                 "AETHER-015",
                 data={"ssid": ssid, "bssid": ap["bssid"], "channel": ap["channel"]},
-                title_override=f"WPS Enabled: {ssid}",
+                title_override=f"Wireless Vulnerability: WPS Enabled: {ssid}",
             )
 
         # WPA3-Transition mode — WPA2+WPA3 mixed; downgrade surface
@@ -2157,7 +2195,7 @@ def scan_targets(
             finding_from_cat(
                 "AETHER-016",
                 data={"ssid": ssid, "bssid": ap["bssid"], "encryption": enc},
-                title_override=f"WPA3 Transition Mode (Downgrade Surface): {ssid}",
+                title_override=f"Wireless Vulnerability: WPA3 Transition Mode (Downgrade Surface): {ssid}",
             )
 
     return discovered
@@ -2428,14 +2466,15 @@ def phase_wireless_intel(
     ssid_label = target_ssids[0] if target_ssids else filtered[0]["ssid"]
     if len(filtered) > 1:
         finding(
-            title=f"Wireless Misconfiguration: Multiple APs Broadcasting SSID: {ssid_label}",
+            title=f"Discovery: Multiple APs Broadcasting SSID",
             severity="INFO",
             description=(
                 f"{len(filtered)} access points are broadcasting '{ssid_label}'. "
                 f"This may indicate a distributed enterprise network or an Evil Twin "
                 f"deployment opportunity."
             ),
-            data={"ap_count": len(filtered),
+            data={"ap_count": len(filtered), "category": "Discovery",
+                  "ssid": ssid_label,
                   "bssids": [ap["bssid"] for ap in filtered]},
         )
 
@@ -2594,7 +2633,7 @@ def phase_deauth_handshake(
                 data={"ssid": ssid, "bssid": bssid, "attack": "deauth",
                       "clients_deauthed": len(clients)},
                 output_file=cap_file,
-                title_override=f"WPA Handshake Captured via Deauth: {ssid}",
+                title_override=f"Wireless Vulnerability: WPA Handshake Captured via Deauth: {ssid}",
             )
 
         # Attempt dictionary crack with aircrack-ng
@@ -2613,6 +2652,7 @@ def phase_deauth_handshake(
             if m_key:
                 psk = m_key.group(1)
                 log(f"[1c] KEY FOUND for {ssid!r}: {psk}")
+                set_auth_state("AUTHENTICATED", f"PSK:{ssid}")
                 finding(
                     title=f"Wireless Vulnerability: WPA Pre-Shared Key Cracked via Deauth: {ssid}",
                     severity="CRITICAL",
@@ -2622,7 +2662,8 @@ def phase_deauth_handshake(
                         f"The PSK was recovered via dictionary attack: '{psk}'."
                     ),
                     data={"ssid": ssid, "bssid": bssid, "psk": psk,
-                          "attack": "deauth+aircrack"},
+                          "attack": "deauth+aircrack",
+                          "category": "Wireless Vulnerability"},
                     output_file=cap_file,
                     cvss_score=9.0,
                     cvss_vector="AV:A/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:N",
@@ -2679,7 +2720,7 @@ def phase_wep(
         finding_from_cat(
             "AETHER-012",
             data={"ssid": ssid, "bssid": bssid, "channel": channel},
-            title_override=f"WEP Encryption in Use: {ssid}",
+            title_override=f"Wireless Vulnerability: WEP Encryption in Use: {ssid}",
         )
 
         cap_prefix = str(wep_dir / f"cap_{safe}")
@@ -2759,11 +2800,12 @@ def phase_wep(
         log(crack_out)
         m_key = re.search(r'KEY FOUND!\s*\[([^\]]+)\]', crack_out, re.I)
         if m_key:
+            set_auth_state("AUTHENTICATED", f"WEP:{ssid}")
             finding_from_cat(
                 "AETHER-013",
                 data={"ssid": ssid, "bssid": bssid, "key": m_key.group(1)},
                 output_file=cap_prefix + "-01.cap",
-                title_override=f"WEP Key Cracked: {ssid}",
+                title_override=f"Wireless Vulnerability: WEP Key Cracked: {ssid}",
             )
 
     log(f"[0] END: WEP Testing — processed {len(wep_aps)} network(s)")
@@ -2868,7 +2910,7 @@ def phase_pmkid(
                     "AETHER-017",
                     data={"ssid": ssid_from_hash, "hash_file": str(hc22000_file)},
                     output_file=str(hc22000_file),
-                    title_override=f"PMKID / EAPOL Hash Captured: {ssid_from_hash}",
+                    title_override=f"Wireless Vulnerability: PMKID / EAPOL Hash Captured: {ssid_from_hash}",
                 )
 
     # Attempt hashcat cracking if available
@@ -2914,12 +2956,13 @@ def phase_pmkid(
                                 ssid_crack = bytes.fromhex(parts[3]).decode("utf-8", errors="replace")
                             except Exception:
                                 ssid_crack = "unknown"
+                            set_auth_state("AUTHENTICATED", f"PMKID:{ssid_crack}")
                             finding_from_cat(
                                 "AETHER-001",
                                 data={"ssid": ssid_crack, "psk": psk,
                                       "attack": "PMKID + hashcat"},
                                 output_file=str(hc22000_file),
-                                title_override=f"WPA PSK Cracked via PMKID: {ssid_crack}",
+                                title_override=f"Wireless Vulnerability: WPA PSK Cracked via PMKID: {ssid_crack}",
                             )
                             break
 
@@ -3035,7 +3078,7 @@ def phase_wifite(
                             f"brute-force. The AP's WPS is vulnerable and the full "
                             f"WPA2 key is exposed."
                         ),
-                        data={"ssid": ssid},
+                        data={"ssid": ssid, "category": "Wireless Vulnerability"},
                         output_file=str(out_file),
                         cvss_score=8.8,
                         cvss_vector="AV:A/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:N",
@@ -3229,12 +3272,13 @@ def phase_eaphammer(
                     r'challenge|response|MSCHAPv2|username|password', decoded, re.I
                 ):
                     cred_found = True
+                    set_auth_state("AUTHENTICATED", f"EAP:{ssid}")
                     finding_from_cat(
                         "AETHER-003",
                         data={"ssid": ssid, "bssid": bssid, "auth": auth,
                               "creds_dir": str(cred_dir)},
                         output_file=str(cred_dir),
-                        title_override=f"WPA-Enterprise Credentials Captured: {ssid}",
+                        title_override=f"Wireless Vulnerability: WPA-Enterprise Credentials Captured: {ssid}",
                     )
             _kill_proc(proc)
             out_file.write_text("\n".join(out_lines), encoding="utf-8")
@@ -3282,12 +3326,13 @@ def _run_asleap(asleap_bin: str, cred_dir: Path, ssid: str,
         log(asleap_out)
         pw_m = re.search(r'(?:password|passwd|pw)[:\s]+(\S+)', asleap_out, re.I)
         if pw_m:
+            set_auth_state("AUTHENTICATED", f"MSCHAPv2:{ssid}")
             finding_from_cat(
                 "AETHER-018",
                 data={"ssid": ssid, "password": pw_m.group(1),
                       "hash_file": str(hf)},
                 output_file=str(out_file),
-                title_override=f"MSCHAPv2 Cracked via asleap: {ssid}",
+                title_override=f"Wireless Vulnerability: MSCHAPv2 Cracked via asleap: {ssid}",
             )
 
 
@@ -3371,7 +3416,7 @@ def phase_dragonslayer(
                         cat_id,
                         data={"ssid": ssid, "attack_mode": attack, "cves": cves},
                         output_file=str(out_file),
-                        title_override=f"WPA3 SAE Dragonblood Mode {attack}: {ssid}",
+                        title_override=f"Wireless Vulnerability: WPA3 SAE Dragonblood Mode {attack}: {ssid}",
                     )
             _kill_proc(proc)
             out_file.write_text("\n".join(out_lines), encoding="utf-8")
@@ -3442,7 +3487,7 @@ def phase_dragondrain(
                     "AETHER-008",
                     data={"ssid": ssid, "bssid": bssid},
                     output_file=str(out_file),
-                    title_override=f"WPA3 SAE Resource Exhaustion Confirmed: {ssid}",
+                    title_override=f"Wireless Vulnerability: WPA3 SAE Resource Exhaustion Confirmed: {ssid}",
                 )
             else:
                 log(f"[4] dragondrain: no exhaustion indicators for {ssid!r}")
@@ -3528,7 +3573,7 @@ def phase_krack(
                             data={"ssid": ssid, "bssid": bssid,
                                   "cve": cve, "variant": variant},
                             output_file=str(out_file),
-                            title_override=f"WPA2 KRACK {variant.title()} ({cve}): {ssid}",
+                            title_override=f"Wireless Vulnerability: WPA2 KRACK {variant.title()} ({cve}): {ssid}",
                         )
                 _kill_proc(proc)
                 out_file.write_text("\n".join(out_lines), encoding="utf-8")
@@ -4083,6 +4128,7 @@ def phase_rogue_ap(monitor_iface: str, primary_iface: str, target_aps: list,
                     f"{val[:4]}{'*'*(len(val)-4)}")
                 captured_psk = val
                 _cracked_psks[bssid.upper()] = val
+                set_auth_state("AUTHENTICATED", f"Portal:{ssid}")
 
             # Check clients in dnsmasq leases
             leases_file = Path("/var/lib/misc/dnsmasq.leases")
@@ -4121,14 +4167,14 @@ def phase_rogue_ap(monitor_iface: str, primary_iface: str, target_aps: list,
                 "rogue_ap_clients",
                 data=findings_data,
                 output_file=str(rogue_dir / "rogue_ap_results.json"),
-                title_override=f"Clients Auto-Associated to Rogue AP: {ssid}",
+                title_override=f"Wireless Vulnerability: Clients Auto-Associated to Rogue AP: {ssid}",
             )
         if captured_psk:
             finding_from_cat(
                 "psk_phished",
                 data=findings_data,
                 output_file=str(rogue_dir / "rogue_ap_results.json"),
-                title_override=f"WPA Passphrase Captured via Phishing Portal: {ssid}",
+                title_override=f"Wireless Vulnerability: WPA Passphrase Captured via Phishing Portal: {ssid}",
             )
         log(f"Phase 6: Complete — {len(connected_clients)} client(s) connected"
             + (f", PSK captured" if captured_psk else ""))
@@ -4207,11 +4253,12 @@ def phase_karma(monitor_iface: str, primary_iface: str, output_dir: Path,
         if cred_file.exists():
             creds = cred_file.read_text(encoding="utf-8", errors="replace")
             if creds.strip():
+                set_auth_state("AUTHENTICATED", "KARMA/MANA")
                 finding_from_cat(
                     "karma_credentials",
                     data={"credentials_raw": creds[:2000]},
                     output_file=str(cred_file),
-                    title_override="WPA-Enterprise Credentials Captured via KARMA/MANA Attack",
+                    title_override="Wireless Vulnerability: WPA-Enterprise Credentials Captured via KARMA/MANA Attack",
                 )
                 log(f"Phase 6b: Credentials captured — see {cred_file}")
             else:
@@ -4332,7 +4379,7 @@ def phase_client_attacks(monitor_iface: str, target_aps: list,
                 "pmf_not_enforced",
                 data=result,
                 output_file=str(ca_dir / "pmf_results.json"),
-                title_override=f"PMF Not Required: Management Frames Unprotected on {ssid}",
+                title_override=f"Wireless Misconfiguration: PMF Not Required: Management Frames Unprotected on {ssid}",
             )
 
     (ca_dir / "pmf_results.json").write_text(json.dumps(results["pmf"], indent=2), encoding="utf-8")
@@ -4388,7 +4435,7 @@ def phase_client_attacks(monitor_iface: str, target_aps: list,
             "probe_harvest",
             data={"count": len(probe_data), "clients": probe_data},
             output_file=str(ca_dir / "probe_harvest.json"),
-            title_override=f"Client Preferred Network List Harvested: {len(probe_data)} Device(s)",
+            title_override=f"Wireless Vulnerability: Client Preferred Network List Harvested: {len(probe_data)} Device(s)",
         )
     else:
         log("Phase 7c: No probe request data available from Phase 0-I.")
@@ -4454,12 +4501,13 @@ def phase_eap_downgrade(monitor_iface: str, target_aps: list,
                           if re.search(r"username|password|mschapv2|credential", l, re.I)]
             if cred_lines:
                 cred_file.write_text("\n".join(cred_lines), encoding="utf-8")
+                set_auth_state("AUTHENTICATED", f"EAP-DG:{ssid}")
                 finding_from_cat(
                     "eap_downgrade_creds",
                     data={"ssid": ssid, "bssid": bssid,
                           "credentials_raw": "\n".join(cred_lines[:20])},
                     output_file=str(cred_file),
-                    title_override=f"EAP Downgrade: Credentials Captured from {ssid}",
+                    title_override=f"Wireless Vulnerability: EAP Downgrade Credentials Captured from {ssid}",
                 )
                 log(f"Phase 8: Credentials captured for {ssid!r}")
             else:
@@ -4535,13 +4583,14 @@ def phase_eap_fast_anon(monitor_iface: str, target_aps: list,
                           if re.search(r"username|password|mschapv2|pac|credential", l, re.I)]
             if cred_lines:
                 cred_file.write_text("\n".join(cred_lines), encoding="utf-8")
+                set_auth_state("AUTHENTICATED", f"EAP-FAST:{ssid}")
                 finding_from_cat(
                     "eap_fast_anon_pac",
                     data={"ssid": ssid, "bssid": bssid,
                           "credentials_raw": "\n".join(cred_lines[:20]),
                           "attack": "EAP-FAST anonymous PAC"},
                     output_file=str(cred_file),
-                    title_override=f"EAP-FAST Anonymous PAC: Credentials Captured from {ssid}",
+                    title_override=f"Wireless Vulnerability: EAP-FAST Anonymous PAC Credentials Captured from {ssid}",
                 )
                 log(f"Phase 8b: EAP-FAST credentials captured for {ssid!r}")
             else:
@@ -4622,13 +4671,14 @@ def phase_mana_loud(monitor_iface: str, primary_iface: str,
         ))
         if cred_lines:
             creds_file.write_text("\n".join(cred_lines), encoding="utf-8")
+            set_auth_state("AUTHENTICATED", "MANA-Loud")
             finding_from_cat(
                 "mana_loud_creds",
                 data={"credentials_raw": "\n".join(cred_lines[:30]),
                       "probed_ssids": ssids_seen[:50],
                       "attack": "MANA loud mode"},
                 output_file=str(creds_file),
-                title_override="MANA Loud Mode: Credentials Captured from Probing Stations",
+                title_override="Wireless Vulnerability: MANA Loud Mode Credentials Captured from Probing Stations",
             )
             log(f"Phase 6c: MANA captured {len(cred_lines)} credential line(s)")
         elif ssids_seen:
@@ -4637,7 +4687,7 @@ def phase_mana_loud(monitor_iface: str, primary_iface: str,
                 data={"probed_ssids": ssids_seen[:50],
                       "attack": "MANA loud mode (probe collection)"},
                 output_file=str(log_file),
-                title_override=("MANA Loud Mode: Stations Probing for "
+                title_override=("Wireless Vulnerability: MANA Loud Mode Stations Probing for "
                                 f"{len(ssids_seen)} Known SSID(s)"),
             )
             log(f"Phase 6c: MANA observed {len(ssids_seen)} probed SSID(s) (no creds)")
@@ -4758,7 +4808,7 @@ def phase_pmkid_roam(monitor_iface: str, target_aps: list,
                           "ess_aps": multi_ap.get(ssid_from_hash, []),
                           "hash_file": str(hc22000_file)},
                     output_file=str(hc22000_file),
-                    title_override=f"PMKID Captured from FT Roam Event: {ssid_from_hash}",
+                    title_override=f"Wireless Vulnerability: PMKID Captured from FT Roam Event: {ssid_from_hash}",
                 )
 
     log("[1c-roam] END: PMKID Roam Capture complete")
@@ -4905,7 +4955,7 @@ def phase_sae_downgrade(monitor_iface: str, primary_iface: str,
                 "sae_transition_downgrade",
                 data=result,
                 output_file=str(dg_dir / "sae_downgrade_results.json"),
-                title_override=f"WPA3 SAE Transition Mode Downgrade: {ssid}",
+                title_override=f"Wireless Vulnerability: WPA3 SAE Transition Mode Downgrade: {ssid}",
             )
         log(f"Phase 9: {ssid!r} — handshake {'captured' if handshake_found else 'not captured'}")
 
@@ -5061,7 +5111,7 @@ def phase_post_connection(ap_iface: str, output_dir: Path,
                 "arp_poison",
                 data=arp_results,
                 output_file=str(pc_dir / "arp_results.json"),
-                title_override=f"ARP Poisoning MITM: {len(arp_results['targets'])} Target(s) Poisoned",
+                title_override=f"Network Misconfiguration: ARP Poisoning MITM: {len(arp_results['targets'])} Target(s) Poisoned",
             )
         status("p10_arp", "Phase 10a: ARP Poisoning / MITM", "complete")
 
@@ -5114,7 +5164,7 @@ def phase_post_connection(ap_iface: str, output_dir: Path,
                         data={"hashes_captured": len(captured_hashes),
                               "interface": ap_iface},
                         output_file=str(resp_log),
-                        title_override="LLMNR/NBT-NS Credential Hashes Captured",
+                        title_override="Uncategorized: LLMNR/NBT-NS Credential Hashes Captured",
                     )
                     log(f"Phase 10b: {len(captured_hashes)} hash file(s) captured")
                 else:
@@ -5161,7 +5211,7 @@ def phase_post_connection(ap_iface: str, output_dir: Path,
                     "internal_hosts",
                     data={"network": network_range, "hosts": interesting},
                     output_file=str(scan_dir / "interesting_hosts.json"),
-                    title_override=f"Internal Network Hosts Discovered: {len(interesting)} Target(s)",
+                    title_override=f"Discovery: Internal Network Hosts Discovered: {len(interesting)} Target(s)",
                 )
                 log(f"Phase 10c: {len(interesting)} host(s) with open ports found")
             else:
@@ -5208,7 +5258,7 @@ def phase_legacy_attacks(monitor_iface: str, target_aps: list,
                 "tkip_detected",
                 data={"ssid": ssid, "bssid": bssid},
                 output_file=str(tkip_dir / "tkip_findings.json"),
-                title_override=f"TKIP Cipher in Use (Deprecated): {ssid}",
+                title_override=f"Wireless Vulnerability: TKIP Cipher in Use (Deprecated): {ssid}",
             )
             # Attempt ChopChop with auto-accept first packet
             try:
@@ -5229,7 +5279,7 @@ def phase_legacy_attacks(monitor_iface: str, target_aps: list,
                         "tkip_chopchop",
                         data={"ssid": ssid, "bssid": bssid},
                         output_file=str(tkip_dir / f"chopchop_{bssid.replace(':','')}.txt"),
-                        title_override=f"TKIP ChopChop XOR Keystream Extracted: {ssid}",
+                        title_override=f"Wireless Vulnerability: TKIP ChopChop XOR Keystream Extracted: {ssid}",
                     )
                 else:
                     log(f"Phase 11a: ChopChop did not produce keystream for {ssid!r}")
@@ -5318,14 +5368,14 @@ def phase_legacy_attacks(monitor_iface: str, target_aps: list,
                         "wifidirect_wps_cracked",
                         data={"bssid": bssid, "ssid": ssid},
                         output_file=str(p2p_dir / f"reaver_{bssid.replace(':','')}.txt"),
-                        title_override=f"Wi-Fi Direct WPS PIN Obtained: {ssid} [{bssid}]",
+                        title_override=f"Wireless Vulnerability: Wi-Fi Direct WPS PIN Obtained: {ssid} [{bssid}]",
                     )
                     log(f"Phase 11b: WPS PIN obtained for {ssid!r}")
             finding_from_cat(
                 "wifidirect_found",
                 data={"bssid": bssid, "ssid": ssid, "channel": channel},
                 output_file=str(p2p_dir / "p2p_devices.json"),
-                title_override=f"Wi-Fi Direct / P2P Device Discovered: {ssid or bssid}",
+                title_override=f"Discovery: Wi-Fi Direct / P2P Device Discovered: {ssid or bssid}",
             )
     else:
         log("Phase 11b: No Wi-Fi Direct / P2P devices found.")
@@ -5501,7 +5551,7 @@ def phase_legacy_attacks(monitor_iface: str, target_aps: list,
                   "iface_ip":      iface_ip or "",
                   "iface_ip6":     iface_ip6 or ""},
             output_file=str(cp_dir / "bypass_results.json"),
-            title_override=(f"Captive Portal Hardening: "
+            title_override=(f"Captive Portal: Captive Portal Hardening: "
                             f"{len(bypasses)} bypass method(s) succeeded"),
         )
     status("p11_captive", "Phase 11c: Captive Portal Bypass Testing", "complete")
@@ -6114,7 +6164,7 @@ def _emit_info(category: str, summary: str, data: dict | None = None) -> None:
     """Emit an informational finding for contextual intel. These do not carry
     a risk grade on their own but provide engagement-context attribution."""
     finding(
-        title=summary,
+        title=f"{category}: {summary}",
         severity="Informational",
         description=f"[{category}] {summary}",
         data={**(data or {}), "category": category},
@@ -6169,23 +6219,23 @@ def phase_contextual_intel(enriched_aps: list, output_dir: Path) -> None:
         # Informational entry per category with all APs in the affected list.
         finding_from_cat("AETHER-INFO-AP", data=ap_data,
                          output_file=str(ctx_dir / "inventory.json"),
-                         title_override="Wireless Access Points Observed (Inventory)")
+                         title_override="Discovery: Wireless Access Points Observed (Inventory)")
 
         finding_from_cat("AETHER-INFO-AUTH-TYPE",
                          data={"bssid": bssid, "ssid": ssid, "auth_type": auth_type,
                                "encryption_raw": enc, "auth_raw": auth},
                          output_file=str(ctx_dir / "inventory.json"),
-                         title_override="Authentication Types Classified (Inventory)")
+                         title_override="Discovery: Authentication Types Classified (Inventory)")
 
         if vendor != "Unknown":
             finding_from_cat("AETHER-INFO-VENDOR",
                              data={"bssid": bssid, "vendor": vendor, "product_line": line},
-                             title_override="Wireless Vendors Identified (Inventory)")
+                             title_override="Discovery: Wireless Vendors Identified (Inventory)")
 
         finding_from_cat("AETHER-INFO-CHANNEL",
                          data={"bssid": bssid, "ssid": ssid, "channel": ch},
                          output_file=str(ctx_dir / "inventory.json"),
-                         title_override="Channel Allocations Observed (Inventory)")
+                         title_override="Discovery: Channel Allocations Observed (Inventory)")
 
         # Per-client catalog within this AP
         for client in (ap.get("clients") or []):
@@ -6274,7 +6324,7 @@ def phase_meraki_recon(enriched_aps: list, output_dir: Path) -> None:
                          data={"bssid": bssid, "ssid": ssid, "vendor": vendor,
                                "product_line": product_line,
                                "channel": ap.get("channel", "")},
-                         title_override=f"Meraki AP identified: {ssid!r} [{bssid}] ({product_line})")
+                         title_override=f"Discovery: Meraki AP Identified: {ssid!r} [{bssid}] ({product_line})")
 
         # Best-effort firmware identification via beacon IE pattern matching
         ies = ap.get("vendor_ies", "") or ap.get("rsn_ie", "") or ""
@@ -6282,7 +6332,7 @@ def phase_meraki_recon(enriched_aps: list, output_dir: Path) -> None:
             finding_from_cat("AETHER-MERAKI-002",
                              data={"bssid": bssid, "ssid": ssid,
                                    "vendor_ies_excerpt": str(ies)[:200]},
-                             title_override=f"Meraki beacon IE captured for fingerprinting: {bssid}")
+                             title_override=f"Discovery: Meraki Beacon IE Captured for Fingerprinting: {bssid}")
 
     # Shared-physical-AP detection (multiple SSIDs per BSSID prefix)
     bssid_prefix_groups: dict = {}
@@ -6304,7 +6354,7 @@ def phase_meraki_recon(enriched_aps: list, output_dir: Path) -> None:
                                  data={"bssid_prefix": prefix, "bssids": bssids,
                                        "ssids": ssids_on_prefix,
                                        "ssid_count": len(ssids_on_prefix)},
-                                 title_override=f"Multiple SSIDs on shared physical AP "
+                                 title_override=f"Wireless Misconfiguration: Multiple SSIDs on Shared Physical AP "
                                                 f"(prefix {prefix}): {', '.join(ssids_on_prefix)}")
 
     (meraki_dir / "meraki_inventory.json").write_text(json.dumps({
@@ -6484,42 +6534,42 @@ def _evaluate_cert_findings(cert_info: dict, target_aps: list,
     # Always emit an informational finding noting the cert was captured
     finding_from_cat("AETHER-INFO-CERT-CAPTURED",
                      data=cert_info,
-                     title_override=f"Server certificate captured from EAP exchange "
+                     title_override=f"Wireless Certificate: Server Certificate Captured from EAP Exchange "
                                     f"(issuer: {issuer[:80]})",
                      output_file=cert_file)
 
     if cert_info.get("weak_algorithm"):
         finding_from_cat("AETHER-CERT-001",
                          data=cert_info,
-                         title_override=f"Weak server certificate signature algorithm: "
+                         title_override=f"Wireless Certificate: Weak Server Certificate Signature Algorithm: "
                                         f"{cert_info.get('signature_algorithm','?')}",
                          output_file=cert_file)
     if cert_info.get("weak_key_length"):
         finding_from_cat("AETHER-CERT-001",
                          data=cert_info,
-                         title_override=f"Weak server certificate key length: "
+                         title_override=f"Wireless Certificate: Weak Server Certificate Key Length: "
                                         f"{cert_info.get('public_key_bits','?')} bits",
                          output_file=cert_file)
     if cert_info.get("expired"):
         finding_from_cat("AETHER-CERT-002",
                          data=cert_info,
-                         title_override=f"Server certificate expired: {cert_info.get('not_after','?')}",
+                         title_override=f"Wireless Certificate: Server Certificate Expired: {cert_info.get('not_after','?')}",
                          output_file=cert_file)
     elif cert_info.get("days_to_expiry", 999) < 30:
         finding_from_cat("AETHER-CERT-002",
                          data=cert_info,
-                         title_override=f"Server certificate expiring in "
-                                        f"{cert_info['days_to_expiry']} days",
+                         title_override=f"Wireless Certificate: Server Certificate Expiring in "
+                                        f"{cert_info['days_to_expiry']} Days",
                          output_file=cert_file)
     if cert_info.get("self_signed"):
         finding_from_cat("AETHER-CERT-003",
                          data=cert_info,
-                         title_override=f"Server certificate is self-signed (subject == issuer)",
+                         title_override=f"Wireless Certificate: Server Certificate is Self-Signed (subject == issuer)",
                          output_file=cert_file)
     if cert_info.get("likely_internal_ca"):
         finding_from_cat("AETHER-CERT-004",
                          data=cert_info,
-                         title_override=f"Server certificate issuer reveals internal CA: "
+                         title_override=f"Wireless Certificate: Server Certificate Issuer Reveals Internal CA: "
                                         f"{issuer[:120]}",
                          output_file=cert_file)
     sans = cert_info.get("subject_alt_names") or []
@@ -6529,7 +6579,7 @@ def _evaluate_cert_findings(cert_info: dict, target_aps: list,
         if radius_like:
             finding_from_cat("AETHER-CERT-005",
                              data={**cert_info, "radius_hostnames": radius_like},
-                             title_override=f"Server cert SAN reveals RADIUS hostname(s): "
+                             title_override=f"Wireless Certificate: Server Cert SAN Reveals RADIUS Hostname(s): "
                                             f"{', '.join(radius_like[:3])}",
                              output_file=cert_file)
 
@@ -6541,8 +6591,8 @@ def _evaluate_cert_findings(cert_info: dict, target_aps: list,
         not cert_info.get("likely_internal_ca")):
         finding_from_cat("AETHER-CERT-006",
                          data=cert_info,
-                         title_override=f"Server certificate uses strong modern algorithm "
-                                        f"and valid public-CA chain (positive)",
+                         title_override=f"Wireless Certificate: Server Certificate Uses Strong Modern Algorithm "
+                                        f"and Valid Public-CA Chain (positive)",
                          output_file=cert_file)
 
 
@@ -6630,9 +6680,9 @@ def phase_ipsk_test(monitor_iface: str, primary_iface: str,
         if distinct_pmkids > 1:
             finding_from_cat("AETHER-IPSK-002",
                              data=ipsk_evidence,
-                             title_override=f"iPSK suspected on {ssid!r}: "
-                                            f"{distinct_pmkids} distinct PMKIDs across "
-                                            f"{len(clients)} clients",
+                             title_override=f"Wireless Misconfiguration: iPSK Suspected on {ssid!r}: "
+                                            f"{distinct_pmkids} Distinct PMKIDs Across "
+                                            f"{len(clients)} Clients",
                              output_file=str(hash_file))
             # If this SSID coexists with an EAP-TLS SSID on the same physical AP
             cert_auth_on_same_ap = any(
@@ -6645,8 +6695,8 @@ def phase_ipsk_test(monitor_iface: str, primary_iface: str,
             if cert_auth_on_same_ap:
                 finding_from_cat("AETHER-IPSK-003",
                                  data=ipsk_evidence,
-                                 title_override=f"iPSK deployed alongside cert-auth SSID "
-                                                f"on same physical AP: {ssid!r}")
+                                 title_override=f"Wireless Misconfiguration: iPSK Deployed Alongside Cert-Auth SSID "
+                                                f"on Same Physical AP: {ssid!r}")
         else:
             _emit_info("iPSK",
                        f"WPA2-PSK Meraki SSID {ssid!r}: only {distinct_pmkids} PMKID "
@@ -6733,9 +6783,9 @@ def phase_captive_portal_test(target_aps: list, output_dir: Path,
                 bypass_results["dns_bypass"] = True
                 finding_from_cat("AETHER-SPLASH-002",
                                  data=bypass_results,
-                                 title_override=f"Captive portal DNS bypass on {ssid!r}: "
-                                                f"DNS queries to external resolvers succeed "
-                                                f"before splash auth")
+                                 title_override=f"Captive Portal: DNS Bypass on {ssid!r}: "
+                                                f"DNS Queries to External Resolvers Succeed "
+                                                f"Before Splash Auth")
             else:
                 bypass_results["dns_bypass"] = False
         except Exception:
@@ -6749,8 +6799,8 @@ def phase_captive_portal_test(target_aps: list, output_dir: Path,
                 bypass_results["icmp_bypass"] = True
                 finding_from_cat("AETHER-SPLASH-003",
                                  data=bypass_results,
-                                 title_override=f"Captive portal ICMP bypass on {ssid!r}: "
-                                                f"external ICMP echo succeeds before splash auth")
+                                 title_override=f"Captive Portal: ICMP Bypass on {ssid!r}: "
+                                                f"External ICMP Echo Succeeds Before Splash Auth")
             else:
                 bypass_results["icmp_bypass"] = False
         except Exception:
@@ -6773,8 +6823,8 @@ def phase_captive_portal_test(target_aps: list, output_dir: Path,
                                      data={**bypass_results,
                                            "splash_headers_excerpt": out[:600],
                                            "indicators": splash_indicators},
-                                     title_override=f"Captive portal headers reveal AP/vendor "
-                                                    f"info on {ssid!r}")
+                                     title_override=f"Captive Portal: Headers Reveal AP/Vendor "
+                                                    f"Info on {ssid!r}")
         except Exception:
             pass
 
@@ -6795,9 +6845,9 @@ def phase_captive_portal_test(target_aps: list, output_dir: Path,
                                            "hosts_visible": _hosts_up,
                                            "subnet": _subnet,
                                            "nmap_excerpt": out[:800]},
-                                     title_override=f"Devices visible on open network "
-                                                    f"without captive portal authentication "
-                                                    f"on {ssid!r}: {_hosts_up} host(s) reachable")
+                                     title_override=f"Captive Portal: Devices Visible on Open Network "
+                                                    f"Without Captive Portal Authentication "
+                                                    f"on {ssid!r}: {_hosts_up} Host(s) Reachable")
         except Exception:
             pass
 
@@ -6807,8 +6857,8 @@ def phase_captive_portal_test(target_aps: list, output_dir: Path,
         if _has_portal:
             finding_from_cat("AETHER-SPLASH-006",
                              data={**bypass_results},
-                             title_override=f"Captive portal detected on open wireless "
-                                            f"network {ssid!r}")
+                             title_override=f"Captive Portal: Captive Portal Detected on Open Wireless "
+                                            f"Network {ssid!r}")
 
         (splash_dir / f"{ssid.replace(' ','_')}_splash.json").write_text(
             json.dumps(bypass_results, indent=2), encoding="utf-8")
@@ -6934,12 +6984,12 @@ def phase_eaptls_identity_analysis(output_dir: Path, timeout: int = 30) -> None:
                    ident == "anonymous" or ident.startswith("@"))
         finding_from_cat("AETHER-INFO-EAP-IDENTITY",
                          data={"identity": ident, "is_anonymous": is_anon},
-                         title_override=f"EAP outer Identity observed: {ident!r}")
+                         title_override=f"Discovery: EAP Outer Identity Observed: {ident!r}")
         if not is_anon and "@" in ident:
             finding_from_cat("AETHER-EAPTLS-001",
                              data={"identity": ident, "username": ident.split("@")[0],
                                    "realm": ident.split("@")[1]},
-                             title_override=f"EAP outer Identity leaks user-realm format: "
+                             title_override=f"Wireless Misconfiguration: EAP Outer Identity Leaks User-Realm Format: "
                                             f"{ident!r}")
 
     (id_dir / "eap_identities.json").write_text(
