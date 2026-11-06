@@ -5652,6 +5652,22 @@ def run(config: dict, project: str) -> None:
     log("=" * 60)
 
     _check_privileges()
+
+    # Startup recovery: if the configured interface doesn't exist but its
+    # monitor-mode variant does (e.g. wlan0 missing but wlan0mon present),
+    # a previous run was killed before cleanup. Restore it automatically.
+    sys_net = Path("/sys/class/net")
+    if sys_net.exists() and not (sys_net / interface).exists():
+        if (sys_net / monitor_iface).exists():
+            log(f"[!] {interface} missing but {monitor_iface} exists — "
+                f"recovering from stuck monitor mode")
+            disable_monitor_mode(monitor_iface, interface)
+            time.sleep(2)
+            if (sys_net / interface).exists():
+                log(f"[+] {interface} restored successfully")
+            else:
+                err(f"[!] Recovery attempted but {interface} still not available")
+
     if not _check_interface(interface):
         err(f"Aborting: interface '{interface}' not available.")
         return
