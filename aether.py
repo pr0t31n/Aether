@@ -1824,7 +1824,8 @@ def _verify_radio_health(interface: str, timeout: int = 10) -> tuple[bool, str]:
             capture_output=True, timeout=timeout,
         )
         # "Network is down" on a managed iface that's still link-down is OK
-        if rc.returncode != 0 and b"Network is down" not in rc.stderr:
+        if rc.returncode != 0 and b"Network is down" not in rc.stderr \
+                and b"Device or resource busy" not in rc.stderr:
             return False, ("scan failed: " +
                            rc.stderr.decode("utf-8", "replace")[:120])
     except subprocess.TimeoutExpired:
