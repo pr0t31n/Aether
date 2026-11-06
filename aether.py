@@ -1021,7 +1021,7 @@ def _auth_strength_tier(auth_type: str) -> int:
     return _AUTH_TIER.get(key, -1)
 
 
-def _detect_mixed_auth_per_ssid(aps: list) -> None:
+def _detect_mixed_auth_per_ssid(aps: list, evidence_file: str = "") -> None:
     """Emit an AETHER-INFO-MIXED-AUTH finding when the same SSID is broadcast
     across multiple BSSIDs with materially different auth-mode strengths.
     Only fires on true downgrades (Δtier ≥ 1 between strongest and weakest
@@ -1079,6 +1079,7 @@ def _detect_mixed_auth_per_ssid(aps: list) -> None:
                     for ap in tier_map[strongest]
                 ],
             },
+            output_file=evidence_file,
             title_override=(
                 f"Authentication: Inconsistent Auth Modes for SSID '{ssid}' — "
                 f"{len(weak_aps)} AP(s) Using Weaker Auth"
@@ -1991,6 +1992,7 @@ def scan_targets(
     target_bssids: list | None = None,
     timeout: int = 30,
     channel: int | None = None,
+    output_dir: "Path | None" = None,
 ) -> list[dict]:
     """
     Passive AP scan (airodump-ng preferred, iwlist fallback) combined with
@@ -2161,6 +2163,23 @@ def scan_targets(
 
     # Annotate discovered APs with WPS status + emit per-AP findings
     log(f"Discovered {len(discovered)} target AP(s)")
+
+    # Write scan evidence so findings can reference it
+    _scan_ev = ""
+    if output_dir is not None:
+        _scan_ev_path = Path(output_dir) / "scan_discovery.json"
+        _scan_ev_path.parent.mkdir(parents=True, exist_ok=True)
+        _scan_ev_path.write_text(json.dumps({
+            "scan_time": datetime.now().isoformat(),
+            "discovered_aps": [
+                {"bssid": a.get("bssid",""), "ssid": a.get("ssid",""),
+                 "channel": a.get("channel",""), "encryption": a.get("encryption",""),
+                 "wps": a.get("wps", False)}
+                for a in discovered
+            ],
+        }, indent=2), encoding="utf-8")
+        _scan_ev = str(_scan_ev_path)
+
     for ap in discovered:
         bssid_upper = ap.get("bssid", "").upper()
         enc         = ap.get("encryption", "")
@@ -2178,6 +2197,7 @@ def scan_targets(
             finding_from_cat(
                 "AETHER-014",
                 data={"ssid": ssid, "bssid": ap["bssid"], "channel": ap["channel"]},
+                output_file=_scan_ev,
                 title_override=f"Wireless Misconfiguration: Open / Unencrypted Network: {ssid}",
             )
 
@@ -2186,6 +2206,7 @@ def scan_targets(
             finding_from_cat(
                 "AETHER-015",
                 data={"ssid": ssid, "bssid": ap["bssid"], "channel": ap["channel"]},
+                output_file=_scan_ev,
                 title_override=f"Wireless Vulnerability: WPS Enabled: {ssid}",
             )
 
@@ -2195,6 +2216,7 @@ def scan_targets(
             finding_from_cat(
                 "AETHER-016",
                 data={"ssid": ssid, "bssid": ap["bssid"], "encryption": enc},
+                output_file=_scan_ev,
                 title_override=f"Wireless Vulnerability: WPA3 Transition Mode (Downgrade Surface): {ssid}",
             )
 
@@ -2476,6 +2498,7 @@ def phase_wireless_intel(
             data={"ap_count": len(filtered), "category": "Discovery",
                   "ssid": ssid_label,
                   "bssids": [ap["bssid"] for ap in filtered]},
+            output_file=str(output_dir / "access_points.json"),
         )
 
     # Log results
@@ -2717,9 +2740,16 @@ def phase_wep(
         channel = ap.get("channel", 6)
         safe    = re.sub(r'[^\w]', '_', ssid or bssid)
 
+        _wep_ev = wep_dir / f"wep_ap_{safe}.json"
+        _wep_ev.write_text(json.dumps({
+            "ssid": ssid, "bssid": bssid, "channel": channel,
+            "encryption": ap.get("encryption", ""),
+            "detected_at": datetime.now().isoformat(),
+        }, indent=2), encoding="utf-8")
         finding_from_cat(
             "AETHER-012",
             data={"ssid": ssid, "bssid": bssid, "channel": channel},
+            output_file=str(_wep_ev),
             title_override=f"Wireless Vulnerability: WEP Encryption in Use: {ssid}",
         )
 
@@ -5695,6 +5725,7 @@ def run(config: dict, project: str) -> None:
         target_aps = scan_targets(
             active_monitor, target_ssids, effective_bssids,
             timeout=30, channel=scan_channel,
+            output_dir=output_dir,
         )
 
         active_aps = [ap for ap in target_aps if _is_active_scope(ap)]
@@ -6160,7 +6191,8 @@ def _classify_auth_type(enc: str, auth: str) -> str:
     return "Unknown"
 
 
-def _emit_info(category: str, summary: str, data: dict | None = None) -> None:
+def _emit_info(category: str, summary: str, data: dict | None = None,
+              output_file: str = "") -> None:
     """Emit an informational finding for contextual intel. These do not carry
     a risk grade on their own but provide engagement-context attribution."""
     finding(
@@ -6168,6 +6200,7 @@ def _emit_info(category: str, summary: str, data: dict | None = None) -> None:
         severity="Informational",
         description=f"[{category}] {summary}",
         data={**(data or {}), "category": category},
+        output_file=output_file,
     )
 
 
@@ -6230,6 +6263,7 @@ def phase_contextual_intel(enriched_aps: list, output_dir: Path) -> None:
         if vendor != "Unknown":
             finding_from_cat("AETHER-INFO-VENDOR",
                              data={"bssid": bssid, "vendor": vendor, "product_line": line},
+                             output_file=str(ctx_dir / "inventory.json"),
                              title_override="Discovery: Wireless Vendors Identified (Inventory)")
 
         finding_from_cat("AETHER-INFO-CHANNEL",
@@ -6257,7 +6291,8 @@ def phase_contextual_intel(enriched_aps: list, output_dir: Path) -> None:
                 inventory["probes"].add(p)
                 finding_from_cat("AETHER-INFO-PROBE",
                                  data={"client_mac": cmac, "probed_ssid": p,
-                                       "seen_on_bssid": bssid})
+                                       "seen_on_bssid": bssid},
+                                 output_file=str(ctx_dir / "inventory.json"))
 
     # ── Cross-AP auth-mode consistency check (per SSID) ──────────────────
     # Same SSID broadcast across multiple BSSIDs with different auth modes
@@ -6266,7 +6301,8 @@ def phase_contextual_intel(enriched_aps: list, output_dir: Path) -> None:
     # Common cause: misconfigured AP, transition-mode mistake, or rogue.
     # Fires only when the spread represents a true downgrade (strongest vs
     # something materially weaker) — not for benign WPA2/WPA3 mixed mode.
-    _detect_mixed_auth_per_ssid(inventory["aps"])
+    _detect_mixed_auth_per_ssid(inventory["aps"],
+                                   evidence_file=str(ctx_dir / "inventory.json"))
 
     # Save consolidated inventory snapshot
     snapshot = {
@@ -6324,6 +6360,7 @@ def phase_meraki_recon(enriched_aps: list, output_dir: Path) -> None:
                          data={"bssid": bssid, "ssid": ssid, "vendor": vendor,
                                "product_line": product_line,
                                "channel": ap.get("channel", "")},
+                         output_file=str(meraki_dir / "meraki_inventory.json"),
                          title_override=f"Discovery: Meraki AP Identified: {ssid!r} [{bssid}] ({product_line})")
 
         # Best-effort firmware identification via beacon IE pattern matching
@@ -6332,6 +6369,7 @@ def phase_meraki_recon(enriched_aps: list, output_dir: Path) -> None:
             finding_from_cat("AETHER-MERAKI-002",
                              data={"bssid": bssid, "ssid": ssid,
                                    "vendor_ies_excerpt": str(ies)[:200]},
+                             output_file=str(meraki_dir / "meraki_inventory.json"),
                              title_override=f"Discovery: Meraki Beacon IE Captured for Fingerprinting: {bssid}")
 
     # Shared-physical-AP detection (multiple SSIDs per BSSID prefix)
@@ -6354,6 +6392,7 @@ def phase_meraki_recon(enriched_aps: list, output_dir: Path) -> None:
                                  data={"bssid_prefix": prefix, "bssids": bssids,
                                        "ssids": ssids_on_prefix,
                                        "ssid_count": len(ssids_on_prefix)},
+                                 output_file=str(meraki_dir / "meraki_inventory.json"),
                                  title_override=f"Wireless Misconfiguration: Multiple SSIDs on Shared Physical AP "
                                                 f"(prefix {prefix}): {', '.join(ssids_on_prefix)}")
 
@@ -6695,13 +6734,16 @@ def phase_ipsk_test(monitor_iface: str, primary_iface: str,
             if cert_auth_on_same_ap:
                 finding_from_cat("AETHER-IPSK-003",
                                  data=ipsk_evidence,
+                                 output_file=str(hash_file) if hash_file.exists() else "",
                                  title_override=f"Wireless Misconfiguration: iPSK Deployed Alongside Cert-Auth SSID "
                                                 f"on Same Physical AP: {ssid!r}")
         else:
             _emit_info("iPSK",
                        f"WPA2-PSK Meraki SSID {ssid!r}: only {distinct_pmkids} PMKID "
                        f"observed — not iPSK or insufficient client diversity",
-                       data=ipsk_evidence)
+                       data=ipsk_evidence,
+                       output_file=str(hash_file) if hash_file.exists() else
+                                   str(pmkid_dump) if pmkid_dump.exists() else "")
 
     log(f"[0-V] END: Meraki iPSK Test — {len(candidates)} candidate(s) evaluated")
     status("p_ipsk", "Phase 0-V: Meraki iPSK Test", "complete",
@@ -6743,17 +6785,20 @@ def phase_captive_portal_test(target_aps: list, output_dir: Path,
         _emit_info("Captive Portal",
                    f"Open SSID identified (may have captive portal): "
                    f"{ssid!r} [{bssid}]",
-                   data={"bssid": bssid, "ssid": ssid, "is_meraki": is_meraki})
+                   data={"bssid": bssid, "ssid": ssid, "is_meraki": is_meraki},
+                   output_file=str(splash_dir / f"{ssid.replace(' ','_')}_splash.json"))
 
         if not primary_iface:
             # No managed-mode iface available for active connection test
             _emit_info("Captive Portal",
                        f"Splash active-bypass tests skipped for {ssid!r}: "
                        f"no managed-mode interface available",
-                       data={"bssid": bssid, "ssid": ssid})
+                       data={"bssid": bssid, "ssid": ssid},
+                       output_file=str(splash_dir / f"{ssid.replace(' ','_')}_splash.json"))
             continue
 
         # Active tests (only if primary_iface available + RoE allows)
+        _splash_ev = str(splash_dir / f"{ssid.replace(' ','_')}_splash.json")
         bypass_results = {
             "ssid": ssid, "bssid": bssid, "is_meraki": is_meraki,
             "dns_bypass": None, "icmp_bypass": None, "splash_url": "",
@@ -6783,6 +6828,7 @@ def phase_captive_portal_test(target_aps: list, output_dir: Path,
                 bypass_results["dns_bypass"] = True
                 finding_from_cat("AETHER-SPLASH-002",
                                  data=bypass_results,
+                                 output_file=_splash_ev,
                                  title_override=f"Captive Portal: DNS Bypass on {ssid!r}: "
                                                 f"DNS Queries to External Resolvers Succeed "
                                                 f"Before Splash Auth")
@@ -6799,6 +6845,7 @@ def phase_captive_portal_test(target_aps: list, output_dir: Path,
                 bypass_results["icmp_bypass"] = True
                 finding_from_cat("AETHER-SPLASH-003",
                                  data=bypass_results,
+                                 output_file=_splash_ev,
                                  title_override=f"Captive Portal: ICMP Bypass on {ssid!r}: "
                                                 f"External ICMP Echo Succeeds Before Splash Auth")
             else:
@@ -6823,6 +6870,7 @@ def phase_captive_portal_test(target_aps: list, output_dir: Path,
                                      data={**bypass_results,
                                            "splash_headers_excerpt": out[:600],
                                            "indicators": splash_indicators},
+                                     output_file=_splash_ev,
                                      title_override=f"Captive Portal: Headers Reveal AP/Vendor "
                                                     f"Info on {ssid!r}")
         except Exception:
@@ -6845,6 +6893,7 @@ def phase_captive_portal_test(target_aps: list, output_dir: Path,
                                            "hosts_visible": _hosts_up,
                                            "subnet": _subnet,
                                            "nmap_excerpt": out[:800]},
+                                     output_file=_splash_ev,
                                      title_override=f"Captive Portal: Devices Visible on Open Network "
                                                     f"Without Captive Portal Authentication "
                                                     f"on {ssid!r}: {_hosts_up} Host(s) Reachable")
@@ -6857,6 +6906,7 @@ def phase_captive_portal_test(target_aps: list, output_dir: Path,
         if _has_portal:
             finding_from_cat("AETHER-SPLASH-006",
                              data={**bypass_results},
+                             output_file=_splash_ev,
                              title_override=f"Captive Portal: Captive Portal Detected on Open Wireless "
                                             f"Network {ssid!r}")
 
@@ -6982,13 +7032,16 @@ def phase_eaptls_identity_analysis(output_dir: Path, timeout: int = 30) -> None:
     for ident in identities:
         is_anon = (ident.lower().startswith("anonymous@") or
                    ident == "anonymous" or ident.startswith("@"))
+        _eap_ev = str(id_dir / "eap_identities.json")
         finding_from_cat("AETHER-INFO-EAP-IDENTITY",
                          data={"identity": ident, "is_anonymous": is_anon},
+                         output_file=_eap_ev,
                          title_override=f"Discovery: EAP Outer Identity Observed: {ident!r}")
         if not is_anon and "@" in ident:
             finding_from_cat("AETHER-EAPTLS-001",
                              data={"identity": ident, "username": ident.split("@")[0],
                                    "realm": ident.split("@")[1]},
+                             output_file=_eap_ev,
                              title_override=f"Wireless Misconfiguration: EAP Outer Identity Leaks User-Realm Format: "
                                             f"{ident!r}")
 
