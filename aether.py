@@ -7001,8 +7001,8 @@ def main():
     # omitted → structured path from config's client_short and start_date fields.
     import re as _re
     if args.project:
-        _pp = Path(args.project)
-        args.project = str(_pp if _pp.is_absolute() else _clients_base() / _pp)
+        _proj_p = Path(args.project)
+        args.project = str(_proj_p if _proj_p.is_absolute() else _clients_base() / _proj_p)
     else:
         _cs = (config.get("client_short") or "").strip()
         _sd = (config.get("start_date") or "").strip()
