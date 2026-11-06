@@ -1,0 +1,709 @@
+{
+  "schema_version": "1.0",
+  "last_updated": "2026-11-06",
+  "vendors": [
+    {
+      "vendor": "Ubiquiti",
+      "vendor_patterns": ["ubiquiti", "ubnt", "unifi", "edgerouter", "edgemax", "airmax"],
+      "models": [
+        {
+          "model_pattern": "UAP-*",
+          "model_regex": "^UAP-",
+          "known_vulns": [
+            {
+              "id": "WFV-UBI-001",
+              "title": "Ubiquiti UniFi Network Application Command Injection",
+              "cves": ["CVE-2023-31998"],
+              "risk": "HIGH",
+              "cvss_score": 7.2,
+              "firmware_affected": "<7.4.156",
+              "description": "Command injection vulnerability in Ubiquiti UniFi Network Application allows authenticated attackers to execute arbitrary commands on the host system via crafted requests to the API.",
+              "remediation": "Update UniFi Network Application to version 7.4.156 or later.",
+              "references": ["https://community.ui.com/releases/Security-Advisory-Bulletin-035/b1bbfe0e-32ed-4b4e-a4e3-16bab1d2c639"]
+            },
+            {
+              "id": "WFV-UBI-002",
+              "title": "Ubiquiti UniFi Protect Sensitive Information Disclosure",
+              "cves": ["CVE-2021-22886"],
+              "risk": "MEDIUM",
+              "cvss_score": 5.3,
+              "firmware_affected": "<1.18.0",
+              "description": "Ubiquiti UniFi Protect before 1.18.0 allows an attacker to access certain sensitive information by sending unauthenticated requests to the discovery service.",
+              "remediation": "Update UniFi Protect to version 1.18.0 or later.",
+              "references": ["https://community.ui.com/releases/Security-Advisory-Bulletin-018/685e4a5e-ec09-4a3b-bd8e-0c17e39c8e2c"]
+            },
+            {
+              "id": "WFV-UBI-003",
+              "title": "Ubiquiti UniFi Controller Directory Traversal",
+              "cves": ["CVE-2020-8267"],
+              "risk": "MEDIUM",
+              "cvss_score": 5.3,
+              "firmware_affected": "<5.13.29",
+              "description": "Ubiquiti UniFi Controller before 5.13.29 allows directory traversal via unauthenticated API requests, potentially exposing sensitive configuration files.",
+              "remediation": "Update UniFi Controller to version 5.13.29 or later.",
+              "references": ["https://community.ui.com/releases/Security-Advisory-Bulletin-014/1c84b27b-0c02-4e6a-b251-38e4a8101ee8"]
+            }
+          ],
+          "default_credentials": [
+            {"username": "ubnt", "password": "ubnt", "service": "ssh", "notes": "Factory default SSH credentials on UniFi APs before adoption"},
+            {"username": "admin", "password": "", "service": "web", "notes": "UniFi Controller initial setup — no password set by default"}
+          ]
+        },
+        {
+          "model_pattern": "ER-*",
+          "model_regex": "^(ER-|EdgeRouter)",
+          "known_vulns": [
+            {
+              "id": "WFV-UBI-004",
+              "title": "Ubiquiti EdgeRouter Command Injection via Web UI",
+              "cves": ["CVE-2023-31998"],
+              "risk": "HIGH",
+              "cvss_score": 7.2,
+              "firmware_affected": "<2.0.9",
+              "description": "Command injection in the web management interface of EdgeRouter allows authenticated administrators to execute arbitrary OS commands.",
+              "remediation": "Update EdgeOS firmware to the latest available version.",
+              "references": ["https://community.ui.com/releases/Security-Advisory-Bulletin-035/b1bbfe0e-32ed-4b4e-a4e3-16bab1d2c639"]
+            }
+          ],
+          "default_credentials": [
+            {"username": "ubnt", "password": "ubnt", "service": "ssh", "notes": "Factory default on all EdgeRouter models"}
+          ]
+        }
+      ],
+      "chipset_vulns": []
+    },
+    {
+      "vendor": "Cisco",
+      "vendor_patterns": ["cisco", "meraki", "aironet", "catalyst"],
+      "models": [
+        {
+          "model_pattern": "Aironet*",
+          "model_regex": "(?i)(aironet|air-cap|air-ap|air-sap)",
+          "known_vulns": [
+            {
+              "id": "WFV-CISCO-001",
+              "title": "Cisco Aironet AP CAPWAP Denial of Service and RCE",
+              "cves": ["CVE-2019-15260"],
+              "risk": "CRITICAL",
+              "cvss_score": 9.8,
+              "firmware_affected": "<8.5.151.0",
+              "description": "Multiple vulnerabilities in the CAPWAP protocol implementation of Cisco Aironet Access Points could allow an unauthenticated, adjacent attacker to gain unauthorized access or cause denial of service. The attacker could access the device with elevated privileges.",
+              "remediation": "Apply Cisco IOS AP software updates. See cisco-sa-20191016-airo-capwap.",
+              "references": ["https://sec.cloudapps.cisco.com/security/center/content/CiscoSecurityAdvisory/cisco-sa-20191016-airo-capwap"]
+            },
+            {
+              "id": "WFV-CISCO-002",
+              "title": "Cisco Aironet AP CDP Protocol RCE",
+              "cves": ["CVE-2020-3110"],
+              "risk": "HIGH",
+              "cvss_score": 8.8,
+              "firmware_affected": "<8.5.151.0",
+              "description": "A vulnerability in the CDP implementation of Cisco Aironet APs could allow an unauthenticated, adjacent attacker to execute arbitrary code with root privileges or cause a reload.",
+              "remediation": "Apply Cisco IOS AP software updates. See cisco-sa-20200205-voip-phones-rce-dos.",
+              "references": ["https://sec.cloudapps.cisco.com/security/center/content/CiscoSecurityAdvisory/cisco-sa-20200205-voip-phones-rce-dos"]
+            }
+          ],
+          "default_credentials": [
+            {"username": "Cisco", "password": "Cisco", "service": "ssh", "notes": "Legacy default on older Aironet APs"},
+            {"username": "admin", "password": "admin", "service": "web", "notes": "Common default on Cisco small business APs"}
+          ]
+        },
+        {
+          "model_pattern": "Meraki*",
+          "model_regex": "(?i)(meraki|MR[0-9]|MS[0-9]|MX[0-9])",
+          "known_vulns": [
+            {
+              "id": "WFV-CISCO-003",
+              "title": "Cisco Meraki MR Series ARP Injection",
+              "cves": ["CVE-2022-20695"],
+              "risk": "CRITICAL",
+              "cvss_score": 10.0,
+              "firmware_affected": "<15.12",
+              "description": "A vulnerability in the authentication functionality of Cisco Wireless LAN Controller (WLC) could allow an unauthenticated, remote attacker to bypass authentication controls and log in to the device through the management interface.",
+              "remediation": "Apply Meraki firmware updates through the Meraki Dashboard.",
+              "references": ["https://sec.cloudapps.cisco.com/security/center/content/CiscoSecurityAdvisory/cisco-sa-wlc-auth-bypass-JRNhV4fF"]
+            }
+          ],
+          "default_credentials": [
+            {"username": "admin", "password": "", "service": "web", "notes": "Meraki APs managed via cloud dashboard — local admin interface has no default password"}
+          ]
+        },
+        {
+          "model_pattern": "Catalyst*",
+          "model_regex": "(?i)(catalyst|C9[0-9]{3}|CW9[0-9]{3})",
+          "known_vulns": [
+            {
+              "id": "WFV-CISCO-004",
+              "title": "Cisco IOS XE Web UI Privilege Escalation",
+              "cves": ["CVE-2023-20198"],
+              "risk": "CRITICAL",
+              "cvss_score": 10.0,
+              "firmware_affected": "IOS XE 16.x/17.x with web UI enabled",
+              "description": "A vulnerability in the web UI feature of Cisco IOS XE allows a remote, unauthenticated attacker to create a privileged account on the affected system, enabling full control of the device.",
+              "remediation": "Disable the HTTP/HTTPS Server feature or apply Cisco IOS XE patches. See cisco-sa-iosxe-webui-privesc-j22SaA4z.",
+              "references": ["https://sec.cloudapps.cisco.com/security/center/content/CiscoSecurityAdvisory/cisco-sa-iosxe-webui-privesc-j22SaA4z"]
+            }
+          ],
+          "default_credentials": [
+            {"username": "admin", "password": "admin", "service": "ssh", "notes": "Default on factory-reset Catalyst 9100 APs"}
+          ]
+        }
+      ],
+      "chipset_vulns": []
+    },
+    {
+      "vendor": "Aruba",
+      "vendor_patterns": ["aruba", "hpe", "hewlett", "aruba networks", "arubaos"],
+      "models": [
+        {
+          "model_pattern": "AP-*",
+          "model_regex": "(?i)(AP-[0-9]|IAP-|RAP-|aruba.*ap)",
+          "known_vulns": [
+            {
+              "id": "WFV-ARUBA-001",
+              "title": "ArubaOS Buffer Overflow Vulnerabilities",
+              "cves": ["CVE-2023-22779", "CVE-2023-22780", "CVE-2023-22781", "CVE-2023-22782", "CVE-2023-22783", "CVE-2023-22784", "CVE-2023-22785", "CVE-2023-22786", "CVE-2023-22787"],
+              "risk": "CRITICAL",
+              "cvss_score": 9.8,
+              "firmware_affected": "ArubaOS <10.4.0.1, <8.11.1.0, <8.10.0.6, <8.6.0.20",
+              "description": "Multiple critical buffer overflow vulnerabilities in ArubaOS and Aruba InstantOS allow unauthenticated remote code execution via specially crafted packets sent to the PAPI protocol (UDP port 8211). Successful exploitation results in arbitrary code execution as a privileged user on the underlying OS.",
+              "remediation": "Upgrade ArubaOS to 10.4.0.1, 8.11.1.0, 8.10.0.6, or 8.6.0.20 and later. Block UDP port 8211 from untrusted networks as a workaround.",
+              "references": ["https://www.arubanetworks.com/assets/alert/ARUBA-PSA-2023-006.txt"]
+            },
+            {
+              "id": "WFV-ARUBA-002",
+              "title": "ArubaOS-Switch Authentication Bypass",
+              "cves": ["CVE-2022-37897"],
+              "risk": "CRITICAL",
+              "cvss_score": 9.8,
+              "firmware_affected": "ArubaOS-Switch <16.11.0006",
+              "description": "An authentication bypass vulnerability in ArubaOS-Switch allows an unauthenticated attacker to remotely execute arbitrary code on affected devices.",
+              "remediation": "Update ArubaOS-Switch to version 16.11.0006 or later.",
+              "references": ["https://www.arubanetworks.com/assets/alert/ARUBA-PSA-2022-016.txt"]
+            }
+          ],
+          "default_credentials": [
+            {"username": "admin", "password": "admin", "service": "ssh", "notes": "Default on Aruba Instant APs (IAP) before first-time setup"},
+            {"username": "admin", "password": "", "service": "web", "notes": "Web UI setup wizard — empty default password"}
+          ]
+        }
+      ],
+      "chipset_vulns": []
+    },
+    {
+      "vendor": "Ruckus",
+      "vendor_patterns": ["ruckus", "commscope", "brocade", "ruckus wireless"],
+      "models": [
+        {
+          "model_pattern": "*",
+          "model_regex": "(?i)(ruckus|R[0-9]{3}|T[0-9]{3}|zoneflex|zonedirector|unleashed)",
+          "known_vulns": [
+            {
+              "id": "WFV-RUCKUS-001",
+              "title": "Ruckus Wireless Admin RCE via Web Interface",
+              "cves": ["CVE-2023-25717"],
+              "risk": "CRITICAL",
+              "cvss_score": 9.8,
+              "firmware_affected": "<200.13.0.0.148",
+              "description": "Multiple Ruckus Wireless products allow unauthenticated remote code execution via a crafted HTTP request. An attacker can exploit the web services interface to execute arbitrary commands as root on the underlying operating system.",
+              "remediation": "Update to SmartZone firmware 200.13.0.0.148 or later. For Unleashed APs, update to 200.11 or later.",
+              "references": ["https://support.ruckuswireless.com/security_bulletins/315"]
+            }
+          ],
+          "default_credentials": [
+            {"username": "super", "password": "sp-admin", "service": "ssh", "notes": "Factory default on ZoneDirector and Unleashed APs"},
+            {"username": "admin", "password": "admin", "service": "web", "notes": "Default on standalone Ruckus APs"}
+          ]
+        }
+      ],
+      "chipset_vulns": []
+    },
+    {
+      "vendor": "Fortinet",
+      "vendor_patterns": ["fortinet", "fortiap", "fortigate", "fortios"],
+      "models": [
+        {
+          "model_pattern": "FortiAP-*",
+          "model_regex": "(?i)(fortiap|fap-|fap[0-9])",
+          "known_vulns": [
+            {
+              "id": "WFV-FORTI-001",
+              "title": "FortiOS Heap-based Buffer Overflow (RCE)",
+              "cves": ["CVE-2023-33308"],
+              "risk": "CRITICAL",
+              "cvss_score": 9.8,
+              "firmware_affected": "FortiOS 7.0.0-7.0.10, 7.2.0-7.2.3",
+              "description": "A stack-based overflow vulnerability in FortiOS allows a remote unauthenticated attacker to execute arbitrary code or commands via crafted packets reaching proxy policies or firewall policies with proxy mode alongside deep packet inspection.",
+              "remediation": "Upgrade FortiOS to 7.0.11, 7.2.4, or 7.4.0 and later.",
+              "references": ["https://www.fortiguard.com/psirt/FG-IR-23-183"]
+            },
+            {
+              "id": "WFV-FORTI-002",
+              "title": "FortiNAC Unauthenticated RCE",
+              "cves": ["CVE-2022-39952"],
+              "risk": "CRITICAL",
+              "cvss_score": 9.8,
+              "firmware_affected": "FortiNAC 8.3-8.8, 9.1.0-9.1.7, 9.2.0-9.2.5, 9.4.0",
+              "description": "External control of file name or path in FortiNAC allows an unauthenticated attacker to write arbitrary files on the system, leading to remote code execution.",
+              "remediation": "Upgrade FortiNAC to 9.4.1, 9.2.6, 9.1.8, or later.",
+              "references": ["https://www.fortiguard.com/psirt/FG-IR-22-300"]
+            }
+          ],
+          "default_credentials": [
+            {"username": "admin", "password": "", "service": "ssh", "notes": "Factory default on FortiAP and FortiGate — empty password"},
+            {"username": "admin", "password": "", "service": "web", "notes": "Web management console default"}
+          ]
+        }
+      ],
+      "chipset_vulns": []
+    },
+    {
+      "vendor": "MikroTik",
+      "vendor_patterns": ["mikrotik", "routeros", "routerboard"],
+      "models": [
+        {
+          "model_pattern": "*",
+          "model_regex": "(?i)(mikrotik|routerboard|RB[0-9]|hAP|cAP|wAP|mANTBox|Audience|Chateau)",
+          "known_vulns": [
+            {
+              "id": "WFV-MTIK-001",
+              "title": "MikroTik RouterOS Privilege Escalation (Super Admin)",
+              "cves": ["CVE-2023-30799"],
+              "risk": "CRITICAL",
+              "cvss_score": 9.1,
+              "firmware_affected": "RouterOS <6.49.8 (stable), <7.x (long-term)",
+              "description": "MikroTik RouterOS allows privilege escalation from admin to super-admin, enabling full control of the device including arbitrary code execution. A remote and authenticated attacker can escalate to the highest privilege level.",
+              "remediation": "Upgrade RouterOS to 6.49.8 (stable) or 7.x (long-term) or later. Restrict management interface access.",
+              "references": ["https://vulncheck.com/advisories/mikrotik-foisted"]
+            },
+            {
+              "id": "WFV-MTIK-002",
+              "title": "MikroTik Winbox Port Unauthenticated RCE",
+              "cves": ["CVE-2018-14847"],
+              "risk": "CRITICAL",
+              "cvss_score": 9.1,
+              "firmware_affected": "RouterOS <6.42.1 and <6.43rc4",
+              "description": "MikroTik RouterOS through version 6.42 allows unauthenticated remote attackers to read arbitrary files and write to files via the Winbox port (TCP 8291). This was exploited in the wild to compromise hundreds of thousands of routers.",
+              "remediation": "Upgrade RouterOS to 6.42.1 or later. Block TCP port 8291 from untrusted networks.",
+              "references": ["https://blog.mikrotik.com/security/winbox-vulnerability.html"]
+            }
+          ],
+          "default_credentials": [
+            {"username": "admin", "password": "", "service": "ssh", "notes": "Factory default — empty password on all MikroTik devices"},
+            {"username": "admin", "password": "", "service": "web", "notes": "WebFig/WinBox management default"},
+            {"username": "admin", "password": "", "service": "winbox", "notes": "Winbox management protocol (TCP 8291)"}
+          ]
+        }
+      ],
+      "chipset_vulns": []
+    },
+    {
+      "vendor": "TP-Link",
+      "vendor_patterns": ["tp-link", "tplink", "tp link", "archer", "deco", "eap"],
+      "models": [
+        {
+          "model_pattern": "Archer*",
+          "model_regex": "(?i)(archer|AX[0-9]|AXE[0-9])",
+          "known_vulns": [
+            {
+              "id": "WFV-TPL-001",
+              "title": "TP-Link Archer Router Command Injection",
+              "cves": ["CVE-2023-1389"],
+              "risk": "HIGH",
+              "cvss_score": 8.8,
+              "firmware_affected": "Archer AX21 firmware <1.1.4 Build 20230219",
+              "description": "Unauthenticated command injection vulnerability in the web management interface of TP-Link Archer AX21 allows an attacker on the local network to execute arbitrary commands. Actively exploited in the wild by the Mirai botnet.",
+              "remediation": "Update Archer AX21 firmware to version 1.1.4 Build 20230219 or later.",
+              "references": ["https://www.tp-link.com/us/support/download/archer-ax21/v3/#Firmware"]
+            },
+            {
+              "id": "WFV-TPL-002",
+              "title": "TP-Link Router Firmware Upload RCE",
+              "cves": ["CVE-2022-30075"],
+              "risk": "HIGH",
+              "cvss_score": 8.8,
+              "firmware_affected": "Multiple Archer models before mid-2022 patches",
+              "description": "A vulnerability in TP-Link Router AX50 firmware allows an authenticated attacker to achieve remote code execution through a crafted firmware image upload.",
+              "remediation": "Update router firmware to the latest version from TP-Link support.",
+              "references": ["https://github.com/aaronsvk/CVE-2022-30075"]
+            }
+          ],
+          "default_credentials": [
+            {"username": "admin", "password": "admin", "service": "web", "notes": "Factory default on most TP-Link consumer routers/APs"}
+          ]
+        },
+        {
+          "model_pattern": "EAP*",
+          "model_regex": "(?i)(EAP[0-9]|Omada)",
+          "known_vulns": [],
+          "default_credentials": [
+            {"username": "admin", "password": "admin", "service": "web", "notes": "Factory default on TP-Link Omada EAP series APs"}
+          ]
+        }
+      ],
+      "chipset_vulns": []
+    },
+    {
+      "vendor": "Netgear",
+      "vendor_patterns": ["netgear", "nighthawk", "orbi", "prosafe", "wax", "wac"],
+      "models": [
+        {
+          "model_pattern": "RAX*",
+          "model_regex": "(?i)(RAX[0-9]|nighthawk|R[0-9]{4})",
+          "known_vulns": [
+            {
+              "id": "WFV-NG-001",
+              "title": "NETGEAR RAX Series Buffer Overflow RCE",
+              "cves": ["CVE-2022-27646"],
+              "risk": "HIGH",
+              "cvss_score": 8.8,
+              "firmware_affected": "RAX30 before 1.0.7.78, R6700v3 before 1.0.4.120",
+              "description": "Buffer overflow vulnerability in NETGEAR routers allows adjacent network attackers to execute arbitrary code. Authentication is not required when the device is in its default configuration.",
+              "remediation": "Update router firmware via NETGEAR support downloads.",
+              "references": ["https://kb.netgear.com/000064720/Security-Advisory-for-Multiple-Vulnerabilities-on-Some-Routers"]
+            }
+          ],
+          "default_credentials": [
+            {"username": "admin", "password": "password", "service": "web", "notes": "Factory default on most NETGEAR consumer routers"},
+            {"username": "admin", "password": "password", "service": "ssh", "notes": "SSH if enabled — same default credentials"}
+          ]
+        },
+        {
+          "model_pattern": "WAX*",
+          "model_regex": "(?i)(WAX[0-9]|WAC[0-9]|prosafe)",
+          "known_vulns": [],
+          "default_credentials": [
+            {"username": "admin", "password": "password", "service": "web", "notes": "Factory default on NETGEAR ProSafe / WAX enterprise APs"}
+          ]
+        }
+      ],
+      "chipset_vulns": []
+    },
+    {
+      "vendor": "D-Link",
+      "vendor_patterns": ["d-link", "dlink", "d link", "dir-", "dap-", "dcs-"],
+      "models": [
+        {
+          "model_pattern": "DIR-*",
+          "model_regex": "(?i)(DIR-[0-9]|DAP-[0-9])",
+          "known_vulns": [
+            {
+              "id": "WFV-DLINK-001",
+              "title": "D-Link DIR Router Unauthenticated RCE",
+              "cves": ["CVE-2019-17621"],
+              "risk": "CRITICAL",
+              "cvss_score": 9.8,
+              "firmware_affected": "DIR-859 A1 1.05 and earlier",
+              "description": "Unauthenticated remote code execution in D-Link DIR routers through UPnP via a crafted M-SEARCH request targeting the SetSNMPSettings action in the hnap_service.",
+              "remediation": "Replace end-of-life DIR models. If still supported, update firmware to the latest version.",
+              "references": ["https://supportannouncement.us.dlink.com/announcement/publication.aspx?name=SAP10124"]
+            }
+          ],
+          "default_credentials": [
+            {"username": "admin", "password": "", "service": "web", "notes": "Factory default on most D-Link routers — empty password"},
+            {"username": "admin", "password": "admin", "service": "web", "notes": "Some newer D-Link models use admin/admin"}
+          ]
+        }
+      ],
+      "chipset_vulns": []
+    },
+    {
+      "vendor": "ASUS",
+      "vendor_patterns": ["asus", "rt-", "gt-", "rog", "aimesh", "zenwifi"],
+      "models": [
+        {
+          "model_pattern": "RT-*",
+          "model_regex": "(?i)(RT-|GT-|ZenWiFi|TUF-)",
+          "known_vulns": [
+            {
+              "id": "WFV-ASUS-001",
+              "title": "ASUS Router Buffer Overflow in httpd",
+              "cves": ["CVE-2023-35086"],
+              "risk": "CRITICAL",
+              "cvss_score": 9.8,
+              "firmware_affected": "RT-AX56U V2 <3.0.0.4.386_50460, RT-AC86U <3.0.0.4.386_51529",
+              "description": "Buffer overflow in the httpd service of ASUS routers allows an unauthenticated remote attacker to execute arbitrary code by sending a specially crafted request.",
+              "remediation": "Update ASUS router firmware to the latest version from the ASUS support page.",
+              "references": ["https://www.asus.com/content/asus-product-security-advisory/"]
+            },
+            {
+              "id": "WFV-ASUS-002",
+              "title": "ASUS Router Memory Corruption via httpd",
+              "cves": ["CVE-2022-26376"],
+              "risk": "CRITICAL",
+              "cvss_score": 9.8,
+              "firmware_affected": "Asuswrt firmware before 2022 Q2 patches",
+              "description": "Memory corruption vulnerability in the Asuswrt httpd unescape functionality allows an unauthenticated attacker to trigger denial of service or remote code execution via a specially crafted HTTP request.",
+              "remediation": "Update to the latest Asuswrt firmware. Enable automatic updates.",
+              "references": ["https://www.asus.com/content/asus-product-security-advisory/"]
+            }
+          ],
+          "default_credentials": [
+            {"username": "admin", "password": "admin", "service": "web", "notes": "Factory default on all ASUS consumer routers"}
+          ]
+        }
+      ],
+      "chipset_vulns": []
+    },
+    {
+      "vendor": "Linksys",
+      "vendor_patterns": ["linksys", "velop", "wrt", "ea"],
+      "models": [
+        {
+          "model_pattern": "*",
+          "model_regex": "(?i)(linksys|velop|WRT|EA[0-9]|MR[0-9]|MX[0-9])",
+          "known_vulns": [
+            {
+              "id": "WFV-LINK-001",
+              "title": "Linksys Router Command Injection",
+              "cves": ["CVE-2022-38841"],
+              "risk": "HIGH",
+              "cvss_score": 8.8,
+              "firmware_affected": "Multiple Linksys models before late-2022 patches",
+              "description": "Authenticated command injection vulnerability in the web management interface of Linksys routers allows execution of arbitrary OS commands.",
+              "remediation": "Update Linksys firmware to the latest version via Linksys support.",
+              "references": ["https://www.linksys.com/support-article?articleNum=317380"]
+            }
+          ],
+          "default_credentials": [
+            {"username": "admin", "password": "admin", "service": "web", "notes": "Factory default on most Linksys consumer routers"}
+          ]
+        }
+      ],
+      "chipset_vulns": []
+    },
+    {
+      "vendor": "EnGenius",
+      "vendor_patterns": ["engenius", "ens", "ecw", "ews"],
+      "models": [
+        {
+          "model_pattern": "*",
+          "model_regex": "(?i)(engenius|ENS[0-9]|ECW[0-9]|EWS[0-9])",
+          "known_vulns": [],
+          "default_credentials": [
+            {"username": "admin", "password": "admin", "service": "web", "notes": "Factory default on EnGenius managed APs"}
+          ]
+        }
+      ],
+      "chipset_vulns": []
+    },
+    {
+      "vendor": "Cambium",
+      "vendor_patterns": ["cambium", "cnpilot", "epmp", "cnmaestro"],
+      "models": [
+        {
+          "model_pattern": "*",
+          "model_regex": "(?i)(cambium|cnpilot|epmp|cnmaestro)",
+          "known_vulns": [],
+          "default_credentials": [
+            {"username": "admin", "password": "admin", "service": "web", "notes": "Factory default on cnPilot APs"}
+          ]
+        }
+      ],
+      "chipset_vulns": []
+    },
+    {
+      "vendor": "Extreme Networks",
+      "vendor_patterns": ["extreme", "extremenetworks", "wing", "identifi"],
+      "models": [
+        {
+          "model_pattern": "*",
+          "model_regex": "(?i)(extreme|wing|identifi|AP[0-9]{3,4})",
+          "known_vulns": [],
+          "default_credentials": [
+            {"username": "admin", "password": "admin123", "service": "web", "notes": "Common default on Extreme / WiNG APs"}
+          ]
+        }
+      ],
+      "chipset_vulns": []
+    }
+  ],
+  "chipset_vulns": [
+    {
+      "chipset_vendor": "Broadcom",
+      "chipset_patterns": ["broadcom", "bcm", "cypress"],
+      "vulns": [
+        {
+          "id": "WFV-CHIP-001",
+          "title": "Broadpwn: Broadcom Wi-Fi Chipset RCE",
+          "cves": ["CVE-2017-9417"],
+          "risk": "CRITICAL",
+          "cvss_score": 9.8,
+          "description": "Heap overflow in the Broadcom BCM43xx Wi-Fi chipset firmware allows a remote attacker within Wi-Fi range to execute arbitrary code on the Wi-Fi SoC. No user interaction required. Affects billions of devices including smartphones, IoT, and enterprise APs using Broadcom chipsets.",
+          "remediation": "Apply vendor firmware updates that include updated Broadcom Wi-Fi driver and firmware.",
+          "references": ["https://blog.exodusintel.com/2017/07/26/broadpwn/"]
+        },
+        {
+          "id": "WFV-CHIP-002",
+          "title": "Broadcom Wi-Fi Chipset Information Disclosure",
+          "cves": ["CVE-2019-8564"],
+          "risk": "MEDIUM",
+          "cvss_score": 5.5,
+          "description": "An information disclosure vulnerability in Broadcom Wi-Fi chipsets allows an adjacent attacker to read kernel memory contents via crafted Wi-Fi frames.",
+          "remediation": "Apply vendor firmware or OS updates that patch the Broadcom Wi-Fi driver.",
+          "references": []
+        },
+        {
+          "id": "WFV-CHIP-003",
+          "title": "Kr00k: Broadcom/Cypress Wi-Fi Encryption Bypass",
+          "cves": ["CVE-2019-15126"],
+          "risk": "HIGH",
+          "cvss_score": 7.5,
+          "description": "A vulnerability in Broadcom and Cypress Wi-Fi chipsets causes traffic to be encrypted with an all-zero session key after a Wi-Fi disassociation event. An adjacent attacker can force disassociation and then capture and decrypt several kilobytes of Wi-Fi traffic.",
+          "remediation": "Apply vendor firmware or OS updates. Affects FullMAC chipsets including BCM4356, BCM4375, BCM43455, CYW4373.",
+          "references": ["https://www.eset.com/int/kr00k/"]
+        }
+      ]
+    },
+    {
+      "chipset_vendor": "Qualcomm Atheros",
+      "chipset_patterns": ["qualcomm", "atheros", "qca", "ath"],
+      "vulns": [
+        {
+          "id": "WFV-CHIP-004",
+          "title": "Qualcomm Atheros Wi-Fi Information Leak",
+          "cves": ["CVE-2020-3702"],
+          "risk": "MEDIUM",
+          "cvss_score": 6.5,
+          "description": "A vulnerability in certain Qualcomm Atheros Wi-Fi chipsets (QCA6174, AR9271) allows an adjacent attacker to decrypt specific Wi-Fi frames due to missing encryption of certain data frames under specific conditions (similar to Kr00k).",
+          "remediation": "Apply vendor driver/firmware patches. Update Linux ath9k/ath10k drivers.",
+          "references": []
+        },
+        {
+          "id": "WFV-CHIP-005",
+          "title": "Qualcomm WLAN Firmware Buffer Overflow",
+          "cves": ["CVE-2019-10539"],
+          "risk": "CRITICAL",
+          "cvss_score": 9.8,
+          "description": "Buffer overflow in WLAN firmware of Qualcomm chipsets due to improper length check while parsing authentication frame IE, allowing remote code execution on the Wi-Fi SoC.",
+          "remediation": "Apply vendor firmware updates that include updated Qualcomm WLAN firmware.",
+          "references": ["https://www.qualcomm.com/company/product-security/bulletins/august-2019-bulletin"]
+        }
+      ]
+    },
+    {
+      "chipset_vendor": "MediaTek",
+      "chipset_patterns": ["mediatek", "mtk", "ralink", "mt76"],
+      "vulns": [
+        {
+          "id": "WFV-CHIP-006",
+          "title": "MediaTek Wi-Fi Driver OOB Write",
+          "cves": ["CVE-2022-32666"],
+          "risk": "HIGH",
+          "cvss_score": 7.5,
+          "description": "An out-of-bounds write vulnerability in the MediaTek Wi-Fi driver allows a remote attacker within Wi-Fi range to potentially execute code or cause a denial of service condition via crafted Wi-Fi packets.",
+          "remediation": "Apply vendor firmware updates. Update Linux mt76 driver if applicable.",
+          "references": ["https://corp.mediatek.com/product-security-bulletin/January-2023"]
+        }
+      ]
+    },
+    {
+      "chipset_vendor": "Intel",
+      "chipset_patterns": ["intel", "ax2", "be2", "wi-fi 6", "wi-fi 7"],
+      "vulns": [
+        {
+          "id": "WFV-CHIP-007",
+          "title": "Intel Wi-Fi Driver Information Disclosure",
+          "cves": ["CVE-2022-21140"],
+          "risk": "MEDIUM",
+          "cvss_score": 5.5,
+          "description": "Improper access control in Intel PROSet/Wireless Wi-Fi and Killer Wi-Fi software may allow a privileged user to enable information disclosure via local access.",
+          "remediation": "Update Intel PROSet/Wireless Wi-Fi driver to the latest version.",
+          "references": ["https://www.intel.com/content/www/us/en/security-center/advisory/intel-sa-00621.html"]
+        },
+        {
+          "id": "WFV-CHIP-008",
+          "title": "Intel Wi-Fi Driver Denial of Service",
+          "cves": ["CVE-2022-36351"],
+          "risk": "MEDIUM",
+          "cvss_score": 6.5,
+          "description": "Improper input validation in Intel Wi-Fi firmware allows an unauthenticated adjacent attacker to cause denial of service on affected Wi-Fi adapters.",
+          "remediation": "Update Intel Wi-Fi firmware via vendor OS or driver updates.",
+          "references": ["https://www.intel.com/content/www/us/en/security-center/advisory/intel-sa-00766.html"]
+        }
+      ]
+    }
+  ],
+  "protocol_vulns": [
+    {
+      "id": "WFV-PROTO-001",
+      "title": "FragAttacks: Aggregation Attack (A-MSDU Injection)",
+      "cves": ["CVE-2020-24588"],
+      "risk": "MEDIUM",
+      "cvss_score": 3.5,
+      "affected_all": true,
+      "description": "A design flaw in the IEEE 802.11 standard allows an adversary to inject arbitrary network packets by abusing the A-MSDU aggregation feature. An adjacent attacker can abuse this to inject arbitrary frames into a protected Wi-Fi network. Affects virtually all Wi-Fi implementations.",
+      "remediation": "Apply vendor firmware/driver updates. The fix involves proper A-MSDU SPP negotiation.",
+      "references": ["https://www.fragattacks.com/"]
+    },
+    {
+      "id": "WFV-PROTO-002",
+      "title": "FragAttacks: Mixed Key Attack (Fragment Cache Poisoning)",
+      "cves": ["CVE-2020-24587"],
+      "risk": "MEDIUM",
+      "cvss_score": 2.6,
+      "affected_all": true,
+      "description": "A design flaw in the IEEE 802.11 standard does not require that all fragments of a frame be encrypted under the same key. An adversary can abuse this to selectively decrypt fragments when another device sends fragmented frames and the WEP, CCMP, or GCMP encryption key is periodically renewed.",
+      "remediation": "Apply vendor firmware/driver updates.",
+      "references": ["https://www.fragattacks.com/"]
+    },
+    {
+      "id": "WFV-PROTO-003",
+      "title": "FragAttacks: Fragment Cache Attack",
+      "cves": ["CVE-2020-24586"],
+      "risk": "MEDIUM",
+      "cvss_score": 3.5,
+      "affected_all": true,
+      "description": "The IEEE 802.11 standard does not require receivers to remove fragments from memory after reconnecting to a network. An adversary can abuse this to inject arbitrary frames by injecting a fragment into memory before the victim reconnects.",
+      "remediation": "Apply vendor firmware/driver updates.",
+      "references": ["https://www.fragattacks.com/"]
+    },
+    {
+      "id": "WFV-PROTO-004",
+      "title": "PMKID Clientless Attack (WPA/WPA2)",
+      "cves": [],
+      "risk": "HIGH",
+      "cvss_score": null,
+      "affected_all": false,
+      "affected_condition": "WPA/WPA2-PSK with PMKID in RSN IE",
+      "description": "WPA/WPA2 access points that include PMKID in the first EAPOL message of the 4-way handshake allow an attacker to capture the PMKID without any client needing to be connected. The PMKID can then be used for offline dictionary attacks against the PSK. This is a protocol weakness, not a vendor-specific bug.",
+      "remediation": "Use strong, long passphrases (16+ characters) for WPA2-PSK. Migrate to WPA3-SAE which is not vulnerable to PMKID capture. Some APs can be configured to not send PMKID in the RSN IE.",
+      "references": ["https://hashcat.net/forum/thread-7717.html"]
+    },
+    {
+      "id": "WFV-PROTO-005",
+      "title": "Kr00k: Wi-Fi Encryption Bypass After Disassociation",
+      "cves": ["CVE-2019-15126"],
+      "risk": "HIGH",
+      "cvss_score": 7.5,
+      "affected_all": false,
+      "affected_condition": "Devices using Broadcom or Cypress FullMAC Wi-Fi chipsets",
+      "description": "After a Wi-Fi disassociation event, affected chipsets transmit buffered data frames encrypted with an all-zero Temporal Key. An adjacent attacker can repeatedly trigger disassociation and capture/decrypt the resulting traffic, potentially exposing sensitive data.",
+      "remediation": "Apply vendor firmware/OS updates. Affected chipsets include Broadcom BCM4356, BCM4375, BCM43455, Cypress CYW4373. Use HTTPS/TLS for sensitive traffic as defense in depth.",
+      "references": ["https://www.eset.com/int/kr00k/"]
+    },
+    {
+      "id": "WFV-PROTO-006",
+      "title": "KRACK: Key Reinstallation Attack",
+      "cves": ["CVE-2017-13077", "CVE-2017-13078", "CVE-2017-13079", "CVE-2017-13080", "CVE-2017-13081", "CVE-2017-13082", "CVE-2017-13084", "CVE-2017-13086", "CVE-2017-13087", "CVE-2017-13088"],
+      "risk": "HIGH",
+      "cvss_score": 6.8,
+      "affected_all": true,
+      "description": "Key reinstallation attacks against WPA2 exploit the four-way handshake to force nonce reuse, allowing an adjacent attacker to decrypt, replay, and in some cases forge Wi-Fi frames. All correct implementations of WPA2 are affected. Android and Linux are particularly vulnerable as wpa_supplicant 2.6 installs an all-zero key.",
+      "remediation": "Apply vendor patches for both access points AND client devices. Most major vendors released patches in late 2017. WPA3 includes protections against KRACK.",
+      "references": ["https://www.krackattacks.com/"]
+    },
+    {
+      "id": "WFV-PROTO-007",
+      "title": "Dragonblood: WPA3-SAE Side-Channel Attacks",
+      "cves": ["CVE-2019-9494", "CVE-2019-9495", "CVE-2019-9496"],
+      "risk": "MEDIUM",
+      "cvss_score": 5.9,
+      "affected_all": false,
+      "affected_condition": "WPA3-SAE implementations",
+      "description": "Side-channel vulnerabilities in WPA3's SAE (Dragonfly) handshake allow an adjacent attacker to recover the Wi-Fi password through cache-based or timing-based attacks on the password encoding step.",
+      "remediation": "Apply vendor firmware updates. Use SAE-PK (SAE with Public Key) where available. Most vendors patched after Dragonblood disclosure in April 2019.",
+      "references": ["https://wpa3.mathyvanhoef.com/"]
+    }
+  ]
+}
