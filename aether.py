@@ -571,9 +571,10 @@ def save_findings(output_dir: Path) -> None:
     consolidated = _merge_native_findings(_findings_collected)
     out = output_dir / "findings_crucible.json"
     out.write_text(json.dumps(consolidated, indent=2), encoding="utf-8")
-    log(f"Findings written: {out} "
+    fj = output_dir / "findings.json"
+    fj.write_text(json.dumps(consolidated, indent=2), encoding="utf-8")
+    log(f"Findings written: {fj} "
         f"({len(consolidated)} consolidated; {len(_findings_collected)} raw)")
-    # Synthesise universal findings.json + summary.json (schema 1.0) alongside.
     _u_synthesize_outputs(output_dir, consolidated)
 
 
@@ -5919,7 +5920,10 @@ def phase_legacy_attacks(monitor_iface: str, target_aps: list,
 def run(config: dict, project: str) -> None:
     global _scope_bssids, _scope_ssids, _scope_modes, _scope_default_mode, _RUN_DIR
 
-    output_dir = Path(project) / config.get("output_dir", "aether_output")
+    if _MANAGED:
+        output_dir = Path(project)
+    else:
+        output_dir = Path(project) / config.get("output_dir", "aether_output")
     output_dir.mkdir(parents=True, exist_ok=True)
     _RUN_DIR = output_dir
 
