@@ -37,11 +37,11 @@
       "kev": false,
       "remediation_brief": "Replace the PSK with a strong random passphrase of at least 20 characters that does not appear in any common wordlist. Enforce WPA3-SAE where hardware supports it. Rotate the PSK immediately and audit which devices have stored it. Consider migrating to WPA3-Enterprise with certificate-based authentication for environments requiring stronger security.",
       "remediation_component": "",
-      "remediation_category": "",
+      "remediation_category": "Configuration",
       "remediation_effort": "",
       "validation_tools": [],
       "description": "wifite2 successfully recovered the WPA/WPA2/WPA3 pre-shared key (PSK) for the target SSID via offline dictionary attack against a captured 4-way handshake or PMKID. An attacker with this key can decrypt all past and future traffic on the network (unless PMF/forward secrecy is enforced) and authenticate as a legitimate client.",
-      "impact": "",
+      "impact": "An attacker could exploit this to gain full system compromise, execute arbitrary code, or obtain complete unauthorized access to sensitive data and systems. Security misconfigurations expose unnecessary attack surface or weaken defensive controls.",
       "_x_severity": "CRITICAL",
       "_x_category": "Wireless Authentication",
       "_x_remediation": "Replace the PSK with a strong random passphrase of at least 20 characters that does not appear in any common wordlist. Enforce WPA3-SAE where hardware supports it. Rotate the PSK immediately and audit which devices have stored it. Consider migrating to WPA3-Enterprise with certificate-based authentication for environments requiring stronger security.",
@@ -79,11 +79,11 @@
       "kev": false,
       "remediation_brief": "Change the WPA/WPA2 PSK to a strong, unique passphrase not present in public wordlists. Enable WPA3-SAE to replace the 4-way handshake authentication exchange with a forward-secret SAE commit/confirm protocol that is resistant to offline attacks. If WPA3 is not available, enforce a minimum passphrase length of 20+ characters drawn from a high-entropy random source.",
       "remediation_component": "",
-      "remediation_category": "",
+      "remediation_category": "Configuration",
       "remediation_effort": "",
       "validation_tools": [],
       "description": "A complete WPA/WPA2 4-way handshake or PMKID was captured for the target SSID. While the PSK has not yet been recovered, the captured material can be subjected to unlimited offline brute-force or dictionary attacks without further access to the network. The handshake was obtained via deauthentication of a connected client or passive PMKID capture.",
-      "impact": "",
+      "impact": "An attacker could leverage this to gain significant unauthorized access, escalate privileges, or exfiltrate sensitive data from affected systems. Security misconfigurations expose unnecessary attack surface or weaken defensive controls.",
       "_x_severity": "HIGH",
       "_x_category": "Wireless Authentication",
       "_x_remediation": "Change the WPA/WPA2 PSK to a strong, unique passphrase not present in public wordlists. Enable WPA3-SAE to replace the 4-way handshake authentication exchange with a forward-secret SAE commit/confirm protocol that is resistant to offline attacks. If WPA3 is not available, enforce a minimum passphrase length of 20+ characters drawn from a high-entropy random source.",
@@ -121,11 +121,11 @@
       "kev": false,
       "remediation_brief": "Deploy client-side certificate validation to prevent clients from connecting to rogue APs: configure the supplicant to validate the RADIUS server certificate against a pinned CA certificate and reject connections when the certificate does not match. Disable weaker EAP methods (PEAP/MSCHAPv2, EAP-MD5) in favour of EAP-TLS with mutual certificate authentication. Train users not to dismiss certificate warnings.",
       "remediation_component": "",
-      "remediation_category": "",
+      "remediation_category": "Configuration",
       "remediation_effort": "",
       "validation_tools": [],
       "description": "EAPHammer deployed a rogue AP that successfully impersonated the target WPA-Enterprise network, downgrades the 802.1X EAP exchange, and captured an MSCHAPv2 challenge/response or NTLM hash from an authenticating client. These hashes can be cracked offline or used directly in pass-the-hash attacks to authenticate to internal Windows/Active Directory resources.",
-      "impact": "",
+      "impact": "An attacker could exploit this to gain full system compromise, execute arbitrary code, or obtain complete unauthorized access to sensitive data and systems. Security misconfigurations expose unnecessary attack surface or weaken defensive controls.",
       "_x_severity": "CRITICAL",
       "_x_category": "WPA-Enterprise / 802.1X",
       "_x_remediation": "Deploy client-side certificate validation to prevent clients from connecting to rogue APs: configure the supplicant to validate the RADIUS server certificate against a pinned CA certificate and reject connections when the certificate does not match. Disable weaker EAP methods (PEAP/MSCHAPv2, EAP-MD5) in favour of EAP-TLS with mutual certificate authentication. Train users not to dismiss certificate warnings.",
@@ -134,7 +134,7 @@
     },
     {
       "id": "AETHER-004",
-      "title": "Wireless Vulnerability: WPA3 SAE Dragonblood \u2014 Invalid Curve Attack Confirmed",
+      "title": "Wireless Vulnerability: WPA3 SAE Dragonblood — Invalid Curve Attack Confirmed",
       "aliases": [],
       "source_tools": [
         "aether"
@@ -163,14 +163,14 @@
       "kev": false,
       "remediation_brief": "Apply firmware updates from the AP vendor that address CVE-2019-9494 and CVE-2019-9495. Ensure the WPA3 implementation validates that received curve points lie on the correct curve (point validation) before performing any SAE computations. Where firmware updates are unavailable, disable WPA3-SAE and use WPA2-Enterprise with EAP-TLS as a mitigation.",
       "remediation_component": "",
-      "remediation_category": "",
+      "remediation_category": "Configuration",
       "remediation_effort": "",
       "validation_tools": [
         "CVE-2019-9494",
         "CVE-2019-9495"
       ],
-      "description": "The target WPA3 SAE implementation accepted an invalid elliptic-curve point during the SAE Commit exchange (attack mode 1 \u2014 invalid curve). This is a variant of the Dragonblood vulnerability class disclosed by Mathy Vanhoef and Eyal Ronen. Exploitation allows an active attacker to trick the AP into performing computations on a weak curve, potentially leaking the password encoding and enabling offline dictionary attacks against WPA3 networks that were intended to be resistant to such attacks.",
-      "impact": "",
+      "description": "The target WPA3 SAE implementation accepted an invalid elliptic-curve point during the SAE Commit exchange (attack mode 1 — invalid curve). This is a variant of the Dragonblood vulnerability class disclosed by Mathy Vanhoef and Eyal Ronen. Exploitation allows an active attacker to trick the AP into performing computations on a weak curve, potentially leaking the password encoding and enabling offline dictionary attacks against WPA3 networks that were intended to be resistant to such attacks.",
+      "impact": "An attacker could leverage this to gain significant unauthorized access, escalate privileges, or exfiltrate sensitive data from affected systems. Security misconfigurations expose unnecessary attack surface or weaken defensive controls.",
       "_x_severity": "HIGH",
       "_x_category": "WPA3 SAE Dragonblood",
       "_x_remediation": "Apply firmware updates from the AP vendor that address CVE-2019-9494 and CVE-2019-9495. Ensure the WPA3 implementation validates that received curve points lie on the correct curve (point validation) before performing any SAE computations. Where firmware updates are unavailable, disable WPA3-SAE and use WPA2-Enterprise with EAP-TLS as a mitigation.",
@@ -182,7 +182,7 @@
     },
     {
       "id": "AETHER-005",
-      "title": "Wireless Vulnerability: WPA3 SAE Dragonblood \u2014 Reflection Attack Confirmed",
+      "title": "Wireless Vulnerability: WPA3 SAE Dragonblood — Reflection Attack Confirmed",
       "aliases": [],
       "source_tools": [
         "aether"
@@ -211,13 +211,13 @@
       "kev": false,
       "remediation_brief": "Apply vendor firmware updates addressing CVE-2019-9494. The fix requires the AP to reject SAE Commit messages whose scalar and element fields match values it previously sent. Upgrade to a patched hostapd/wpa_supplicant version (2.10+).",
       "remediation_component": "",
-      "remediation_category": "",
+      "remediation_category": "Configuration",
       "remediation_effort": "",
       "validation_tools": [
         "CVE-2019-9494"
       ],
       "description": "The target WPA3 SAE implementation is vulnerable to the SAE reflection attack (attack mode 0). By reflecting the AP's own SAE Commit message back to it, the attacking station tricks the AP into deriving the same PWE (Password Element), which can be used to authenticate without knowing the actual PSK under certain conditions. This is part of the Dragonblood vulnerability class (CVE-2019-9494).",
-      "impact": "",
+      "impact": "An attacker could leverage this to gain significant unauthorized access, escalate privileges, or exfiltrate sensitive data from affected systems. Security misconfigurations expose unnecessary attack surface or weaken defensive controls.",
       "_x_severity": "HIGH",
       "_x_category": "WPA3 SAE Dragonblood",
       "_x_remediation": "Apply vendor firmware updates addressing CVE-2019-9494. The fix requires the AP to reject SAE Commit messages whose scalar and element fields match values it previously sent. Upgrade to a patched hostapd/wpa_supplicant version (2.10+).",
@@ -228,7 +228,7 @@
     },
     {
       "id": "AETHER-006",
-      "title": "Wireless Vulnerability: WPA3 SAE Dragonblood \u2014 Secondary Invalid Curve Attack Confirmed",
+      "title": "Wireless Vulnerability: WPA3 SAE Dragonblood — Secondary Invalid Curve Attack Confirmed",
       "aliases": [],
       "source_tools": [
         "aether"
@@ -257,7 +257,7 @@
       "kev": false,
       "remediation_brief": "Apply firmware updates that fully remediate CVE-2019-9495 across all SAE Commit handling code paths. Ensure the patched implementation performs explicit point validation on all received group elements before use in PWE derivation. Verify remediation by re-running dragonslayer attack modes 1 and 2.",
       "remediation_component": "",
-      "remediation_category": "",
+      "remediation_category": "Configuration",
       "remediation_effort": "",
       "validation_tools": [
         "CVE-2019-9495",
@@ -266,7 +266,7 @@
         "CVE-2019-9499"
       ],
       "description": "The target WPA3 SAE implementation is vulnerable to a secondary invalid curve attack variant (attack mode 2). This variant exploits the same class of point-validation weakness as CVE-2019-9495 but uses a different curve parameter manipulation technique, demonstrating that the AP's SAE implementation does not adequately validate curve points across multiple attack vectors.",
-      "impact": "",
+      "impact": "An attacker could leverage this to gain significant unauthorized access, escalate privileges, or exfiltrate sensitive data from affected systems. Security misconfigurations expose unnecessary attack surface or weaken defensive controls.",
       "_x_severity": "HIGH",
       "_x_category": "WPA3 SAE Dragonblood",
       "_x_remediation": "Apply firmware updates that fully remediate CVE-2019-9495 across all SAE Commit handling code paths. Ensure the patched implementation performs explicit point validation on all received group elements before use in PWE derivation. Verify remediation by re-running dragonslayer attack modes 1 and 2.",
@@ -280,7 +280,7 @@
     },
     {
       "id": "AETHER-007",
-      "title": "Wireless Vulnerability: WPA3 SAE Dragonblood \u2014 Zero-Scalar Attack Confirmed",
+      "title": "Wireless Vulnerability: WPA3 SAE Dragonblood — Zero-Scalar Attack Confirmed",
       "aliases": [],
       "source_tools": [
         "aether"
@@ -307,20 +307,20 @@
       "searchsploit_terms": [],
       "metasploit_modules": [],
       "kev": false,
-      "remediation_brief": "Apply vendor firmware updates addressing CVE-2019-9500 through CVE-2019-9502. The AP must validate that received scalar values are within the valid range (1 \u2264 scalar < order) and reject any Commit message with a scalar of zero or order.",
+      "remediation_brief": "Apply vendor firmware updates addressing CVE-2019-9500 through CVE-2019-9502. The AP must validate that received scalar values are within the valid range (1 ≤ scalar < order) and reject any Commit message with a scalar of zero or order.",
       "remediation_component": "",
-      "remediation_category": "",
+      "remediation_category": "Configuration",
       "remediation_effort": "",
       "validation_tools": [
         "CVE-2019-9500",
         "CVE-2019-9501",
         "CVE-2019-9502"
       ],
-      "description": "The target WPA3 SAE implementation accepted a SAE Commit message with a zero scalar value (attack mode 3). Sending a scalar of zero forces the resulting shared key to be zero or a trivially predictable value, potentially allowing an attacker to authenticate without the actual PSK. This is a variant of the Dragonblood flaw class (CVE-2019-9500\u20139502).",
-      "impact": "",
+      "description": "The target WPA3 SAE implementation accepted a SAE Commit message with a zero scalar value (attack mode 3). Sending a scalar of zero forces the resulting shared key to be zero or a trivially predictable value, potentially allowing an attacker to authenticate without the actual PSK. This is a variant of the Dragonblood flaw class (CVE-2019-9500–9502).",
+      "impact": "An attacker could leverage this to gain significant unauthorized access, escalate privileges, or exfiltrate sensitive data from affected systems. Security misconfigurations expose unnecessary attack surface or weaken defensive controls.",
       "_x_severity": "HIGH",
       "_x_category": "WPA3 SAE Dragonblood",
-      "_x_remediation": "Apply vendor firmware updates addressing CVE-2019-9500 through CVE-2019-9502. The AP must validate that received scalar values are within the valid range (1 \u2264 scalar < order) and reject any Commit message with a scalar of zero or order.",
+      "_x_remediation": "Apply vendor firmware updates addressing CVE-2019-9500 through CVE-2019-9502. The AP must validate that received scalar values are within the valid range (1 ≤ scalar < order) and reject any Commit message with a scalar of zero or order.",
       "_x_references": [
         "CVE-2019-9500",
         "CVE-2019-9501",
@@ -359,13 +359,13 @@
       "kev": false,
       "remediation_brief": "Apply firmware updates that implement SAE anti-clogging (as specified in IEEE 802.11-2020 Section 12.4.6). Anti-clogging tokens force clients to echo a token before the AP performs expensive elliptic-curve computations, preventing CPU exhaustion. Also enable rate limiting on SAE Commit frames per source MAC address. Update to hostapd 2.10+ which includes anti-clogging support.",
       "remediation_component": "",
-      "remediation_category": "",
+      "remediation_category": "Configuration",
       "remediation_effort": "",
       "validation_tools": [
         "CVE-2019-9496"
       ],
       "description": "The target AP was subjected to the Dragondrain SAE commit-flooding attack (CVE-2019-9496). The AP was flooded with forged SAE Commit messages using spoofed source MAC addresses at high rate, targeting curve group 21 (521-bit elliptic). If the AP does not implement anti-clogging tokens or rate limiting, this causes CPU exhaustion and potential denial of service affecting legitimate clients.",
-      "impact": "",
+      "impact": "An attacker could potentially exploit this weakness to gain partial access, disclose sensitive information, or degrade the security posture of the affected system. Security misconfigurations expose unnecessary attack surface or weaken defensive controls.",
       "_x_severity": "MEDIUM",
       "_x_category": "WPA3 SAE Dragonblood",
       "_x_remediation": "Apply firmware updates that implement SAE anti-clogging (as specified in IEEE 802.11-2020 Section 12.4.6). Anti-clogging tokens force clients to echo a token before the AP performs expensive elliptic-curve computations, preventing CPU exhaustion. Also enable rate limiting on SAE Commit frames per source MAC address. Update to hostapd 2.10+ which includes anti-clogging support.",
@@ -376,7 +376,7 @@
     },
     {
       "id": "AETHER-009",
-      "title": "Wireless Vulnerability: WPA2 KRACK Vulnerability \u2014 Standard 4-Way Handshake Reinstallation",
+      "title": "Wireless Vulnerability: WPA2 KRACK Vulnerability — Standard 4-Way Handshake Reinstallation",
       "aliases": [],
       "source_tools": [
         "aether"
@@ -405,14 +405,14 @@
       "kev": false,
       "remediation_brief": "Apply OS and driver security updates for all wireless clients that address CVE-2017-13077. On the AP side, apply firmware updates that prevent retransmission of handshake message 3 after the key has already been installed. For Android (especially 6.0), this vulnerability resulted in all-zero key reinstallation; priority patch Android devices. Verify remediation with the krackattacks test scripts.",
       "remediation_component": "",
-      "remediation_category": "",
+      "remediation_category": "Configuration",
       "remediation_effort": "",
       "validation_tools": [
         "CVE-2017-13077",
         "CWE-330"
       ],
       "description": "The target client or AP is vulnerable to the KRACK key reinstallation attack targeting the standard 4-way handshake (CVE-2017-13077). By replaying and manipulating handshake message 3, an attacker can cause the client to reinstall an already-in-use pairwise transient key (PTK), resetting its associated nonce and replay counters. This allows the attacker to replay, decrypt, and potentially forge 802.11 frames.",
-      "impact": "",
+      "impact": "An attacker could leverage this to gain significant unauthorized access, escalate privileges, or exfiltrate sensitive data from affected systems. Security misconfigurations expose unnecessary attack surface or weaken defensive controls.",
       "_x_severity": "HIGH",
       "_x_category": "KRACK Key Reinstallation",
       "_x_remediation": "Apply OS and driver security updates for all wireless clients that address CVE-2017-13077. On the AP side, apply firmware updates that prevent retransmission of handshake message 3 after the key has already been installed. For Android (especially 6.0), this vulnerability resulted in all-zero key reinstallation; priority patch Android devices. Verify remediation with the krackattacks test scripts.",
@@ -424,7 +424,7 @@
     },
     {
       "id": "AETHER-010",
-      "title": "Wireless Vulnerability: WPA2 KRACK Vulnerability \u2014 TPTK Variant",
+      "title": "Wireless Vulnerability: WPA2 KRACK Vulnerability — TPTK Variant",
       "aliases": [],
       "source_tools": [
         "aether"
@@ -453,14 +453,14 @@
       "kev": false,
       "remediation_brief": "Apply security patches addressing CVE-2017-13078 for all affected wireless clients and APs. Ensure the supplicant implementation validates that new handshake sessions use fresh ANonces and that reinstallation of previously installed PTKs is prevented. Review and patch all wpa_supplicant and hostapd deployments to version 2.7+.",
       "remediation_component": "",
-      "remediation_category": "",
+      "remediation_category": "Configuration",
       "remediation_effort": "",
       "validation_tools": [
         "CVE-2017-13078",
         "CWE-330"
       ],
       "description": "The target is vulnerable to the KRACK Temporal PTK (TPTK) variant (CVE-2017-13078). This variant exploits the handling of message 1 of the 4-way handshake to cause nonce reuse in the PTK re-derivation process. The attacker can trigger a PTK reinstallation by injecting a retransmitted handshake message 1 with a replayed ANonce, forcing the client to reinstall an already-used key.",
-      "impact": "",
+      "impact": "An attacker could leverage this to gain significant unauthorized access, escalate privileges, or exfiltrate sensitive data from affected systems. Security misconfigurations expose unnecessary attack surface or weaken defensive controls.",
       "_x_severity": "HIGH",
       "_x_category": "KRACK Key Reinstallation",
       "_x_remediation": "Apply security patches addressing CVE-2017-13078 for all affected wireless clients and APs. Ensure the supplicant implementation validates that new handshake sessions use fresh ANonces and that reinstallation of previously installed PTKs is prevented. Review and patch all wpa_supplicant and hostapd deployments to version 2.7+.",
@@ -472,7 +472,7 @@
     },
     {
       "id": "AETHER-011",
-      "title": "Wireless Vulnerability: WPA2 KRACK Vulnerability \u2014 Group Key Reinstallation",
+      "title": "Wireless Vulnerability: WPA2 KRACK Vulnerability — Group Key Reinstallation",
       "aliases": [],
       "source_tools": [
         "aether"
@@ -501,14 +501,14 @@
       "kev": false,
       "remediation_brief": "Apply patches addressing CVE-2017-13080 for all wireless clients. The fix requires the supplicant to check whether the GTK being installed was already installed with the same key ID, and to reject reinstallation. Additionally, disable GTK rekeying on affected APs as a temporary mitigation until client patches are applied. Upgrade to wpa_supplicant 2.7+.",
       "remediation_component": "",
-      "remediation_category": "",
+      "remediation_category": "Configuration",
       "remediation_effort": "",
       "validation_tools": [
         "CVE-2017-13080",
         "CWE-330"
       ],
       "description": "The target is vulnerable to KRACK group key reinstallation (CVE-2017-13080). By replaying group key handshake message 1, an attacker can cause the client to reinstall an already-in-use group temporal key (GTK) with a reset replay counter. This allows the attacker to replay broadcast and multicast frames, which can be leveraged to inject ARP spoofing packets or perform other layer-2 attacks against all clients on the network.",
-      "impact": "",
+      "impact": "An attacker could leverage this to gain significant unauthorized access, escalate privileges, or exfiltrate sensitive data from affected systems. Security misconfigurations expose unnecessary attack surface or weaken defensive controls.",
       "_x_severity": "HIGH",
       "_x_category": "KRACK Key Reinstallation",
       "_x_remediation": "Apply patches addressing CVE-2017-13080 for all wireless clients. The fix requires the supplicant to check whether the GTK being installed was already installed with the same key ID, and to reject reinstallation. Additionally, disable GTK rekeying on affected APs as a temporary mitigation until client patches are applied. Upgrade to wpa_supplicant 2.7+.",
@@ -547,20 +547,20 @@
       "searchsploit_terms": [],
       "metasploit_modules": [],
       "kev": false,
-      "remediation_brief": "Immediately replace WEP with WPA3-Personal (SAE) or at minimum WPA2-Personal (CCMP/AES). WEP cannot be patched \u2014 upgrade the AP firmware or replace the device. Segment any WEP-only legacy devices onto an isolated VLAN with no access to sensitive resources until they can be replaced.",
+      "remediation_brief": "Immediately replace WEP with WPA3-Personal (SAE) or at minimum WPA2-Personal (CCMP/AES). WEP cannot be patched — upgrade the AP firmware or replace the device. Segment any WEP-only legacy devices onto an isolated VLAN with no access to sensitive resources until they can be replaced.",
       "remediation_component": "",
-      "remediation_category": "",
+      "remediation_category": "Configuration",
       "remediation_effort": "",
       "validation_tools": [
         "CVE-2001-0309",
         "IEEE 802.11i-2004",
         "PTW Attack (Pyshkin, Tews, Weinmann 2007)"
       ],
-      "description": "The target network uses WEP (Wired Equivalent Privacy), which has been cryptographically broken since 2001 (CVE-2001-0309). The RC4 stream cipher reuses 24-bit initialisation vectors (IVs), allowing the FMS, KoreK, and PTW statistical attacks to recover any WEP key from roughly 50 000 captured frames \u2014 achievable in under a minute on an active network. An attacker within radio range can decrypt all traffic and authenticate as a legitimate station. WEP was deprecated by IEEE 802.11i in 2004 and formally withdrawn. No patch exists; the protocol must be replaced.",
-      "impact": "",
+      "description": "The target network uses WEP (Wired Equivalent Privacy), which has been cryptographically broken since 2001 (CVE-2001-0309). The RC4 stream cipher reuses 24-bit initialisation vectors (IVs), allowing the FMS, KoreK, and PTW statistical attacks to recover any WEP key from roughly 50 000 captured frames — achievable in under a minute on an active network. An attacker within radio range can decrypt all traffic and authenticate as a legitimate station. WEP was deprecated by IEEE 802.11i in 2004 and formally withdrawn. No patch exists; the protocol must be replaced.",
+      "impact": "An attacker could leverage this to gain significant unauthorized access, escalate privileges, or exfiltrate sensitive data from affected systems. Security misconfigurations expose unnecessary attack surface or weaken defensive controls.",
       "_x_severity": "HIGH",
       "_x_category": "Legacy Wireless Encryption",
-      "_x_remediation": "Immediately replace WEP with WPA3-Personal (SAE) or at minimum WPA2-Personal (CCMP/AES). WEP cannot be patched \u2014 upgrade the AP firmware or replace the device. Segment any WEP-only legacy devices onto an isolated VLAN with no access to sensitive resources until they can be replaced.",
+      "_x_remediation": "Immediately replace WEP with WPA3-Personal (SAE) or at minimum WPA2-Personal (CCMP/AES). WEP cannot be patched — upgrade the AP firmware or replace the device. Segment any WEP-only legacy devices onto an isolated VLAN with no access to sensitive resources until they can be replaced.",
       "_x_references": [
         "CVE-2001-0309",
         "IEEE 802.11i-2004",
@@ -599,14 +599,14 @@
       "kev": false,
       "remediation_brief": "Treat the network as compromised. Replace WEP with WPA3-Personal immediately. Rotate all credentials used on devices that connected to this network. Review logs for unauthorised access since the network was deployed. Notify affected users. Replace hardware that cannot support WPA2.",
       "remediation_component": "",
-      "remediation_category": "",
+      "remediation_category": "Configuration",
       "remediation_effort": "",
       "validation_tools": [
         "CVE-2001-0309",
         "PTW Attack (Pyshkin, Tews, Weinmann 2007)"
       ],
       "description": "aircrack-ng recovered the WEP key using the PTW statistical attack against collected IVs. With the key an attacker can decrypt all past and future traffic in real time, inject arbitrary 802.11 frames, and authenticate as a legitimate station. The network must be treated as fully compromised. All credentials, session tokens, and data transmitted over this network must be assumed captured by an adversary.",
-      "impact": "",
+      "impact": "An attacker could exploit this to gain full system compromise, execute arbitrary code, or obtain complete unauthorized access to sensitive data and systems. Security misconfigurations expose unnecessary attack surface or weaken defensive controls.",
       "_x_severity": "CRITICAL",
       "_x_category": "Legacy Wireless Encryption",
       "_x_remediation": "Treat the network as compromised. Replace WEP with WPA3-Personal immediately. Rotate all credentials used on devices that connected to this network. Review logs for unauthorised access since the network was deployed. Notify affected users. Replace hardware that cannot support WPA2.",
@@ -647,11 +647,11 @@
       "kev": false,
       "remediation_brief": "Enable WPA3-Personal (SAE) or WPA2-Personal (CCMP/AES). If the network is intentionally open (guest portal, public hotspot), enforce TLS for all services, enable AP client isolation, and display a legal notice. Consider 802.11u Hotspot 2.0 / Passpoint for authenticated open networks that do not require a pre-shared key.",
       "remediation_component": "",
-      "remediation_category": "",
+      "remediation_category": "Configuration",
       "remediation_effort": "",
       "validation_tools": [],
       "description": "The target network operates without wireless encryption (open authentication, no WEP/WPA). All data is transmitted in cleartext and can be captured passively by any device within radio range. HTTP sessions, credentials, emails, DNS queries, and file transfers are fully exposed without any evidence of interception.",
-      "impact": "",
+      "impact": "An attacker could potentially exploit this weakness to gain partial access, disclose sensitive information, or degrade the security posture of the affected system. Security misconfigurations expose unnecessary attack surface or weaken defensive controls.",
       "_x_severity": "MEDIUM",
       "_x_category": "Wireless Encryption",
       "_x_remediation": "Enable WPA3-Personal (SAE) or WPA2-Personal (CCMP/AES). If the network is intentionally open (guest portal, public hotspot), enforce TLS for all services, enable AP client isolation, and display a legal notice. Consider 802.11u Hotspot 2.0 / Passpoint for authenticated open networks that do not require a pre-shared key.",
@@ -689,14 +689,14 @@
       "kev": false,
       "remediation_brief": "Disable WPS on the AP if it is not operationally required. If WPS is required, ensure the AP uses WPS 2.0 with lockout after 3 failed attempts and verify Pixie-Dust mitigation is implemented in the firmware. Apply all vendor firmware updates. Note: WPS cannot be safely enabled on APs with Broadcom or Ralink chipsets without explicit Pixie-Dust patches.",
       "remediation_component": "",
-      "remediation_category": "",
+      "remediation_category": "Configuration",
       "remediation_effort": "",
       "validation_tools": [
         "CVE-2014-9527",
         "CVE-2012-4366"
       ],
       "description": "Wi-Fi Protected Setup (WPS) is enabled on the target AP. WPS PIN-based authentication has a fundamental design flaw: the 8-digit PIN is verified in two independent 4-digit halves, reducing the effective keyspace from 10^8 to ~11 000 attempts. Many APs are additionally vulnerable to the Pixie-Dust attack (CVE-2014-9527), which recovers the WPS PIN offline in seconds from weak nonce values. A successful WPS attack recovers the full WPA2 PSK regardless of its length or complexity.",
-      "impact": "",
+      "impact": "An attacker could potentially exploit this weakness to gain partial access, disclose sensitive information, or degrade the security posture of the affected system. Security misconfigurations expose unnecessary attack surface or weaken defensive controls.",
       "_x_severity": "MEDIUM",
       "_x_cvss_score": 7.5,
       "_x_category": "WPS",
@@ -708,7 +708,7 @@
     },
     {
       "id": "AETHER-016",
-      "title": "Wireless Vulnerability: WPA3 Transition Mode \u2014 Downgrade Attack Surface",
+      "title": "Wireless Vulnerability: WPA3 Transition Mode — Downgrade Attack Surface",
       "aliases": [],
       "source_tools": [
         "aether"
@@ -735,19 +735,19 @@
       "searchsploit_terms": [],
       "metasploit_modules": [],
       "kev": false,
-      "remediation_brief": "Migrate to WPA3-only mode when all client devices support WPA3-SAE. In the interim, enable 802.11w (PMF) as mandatory \u2014 this prevents deauthentication-based downgrade forcing. Audit which clients cannot support WPA3 and establish a remediation timeline. Consider a separate SSID for legacy WPA2 clients rather than running mixed mode on the primary SSID.",
+      "remediation_brief": "Migrate to WPA3-only mode when all client devices support WPA3-SAE. In the interim, enable 802.11w (PMF) as mandatory — this prevents deauthentication-based downgrade forcing. Audit which clients cannot support WPA3 and establish a remediation timeline. Consider a separate SSID for legacy WPA2 clients rather than running mixed mode on the primary SSID.",
       "remediation_component": "",
-      "remediation_category": "",
+      "remediation_category": "Configuration",
       "remediation_effort": "",
       "validation_tools": [
         "CVE-2019-9494"
       ],
       "description": "The target AP is operating in WPA3-Transition mode (WPA2/WPA3 mixed mode), simultaneously supporting both WPA2 and WPA3 clients. An attacker can deploy a rogue AP advertising only WPA2 with the same SSID. Clients configured for transition mode will connect via WPA2, exposing their 4-way handshake to standard offline dictionary cracking. This is the most practical WPA3 attack vector in real-world deployments. Tools: DragonShift, hostapd-mana.",
-      "impact": "",
+      "impact": "An attacker could potentially exploit this weakness to gain partial access, disclose sensitive information, or degrade the security posture of the affected system. Security misconfigurations expose unnecessary attack surface or weaken defensive controls.",
       "_x_severity": "MEDIUM",
       "_x_cvss_score": 7.5,
       "_x_category": "WPA3 Downgrade",
-      "_x_remediation": "Migrate to WPA3-only mode when all client devices support WPA3-SAE. In the interim, enable 802.11w (PMF) as mandatory \u2014 this prevents deauthentication-based downgrade forcing. Audit which clients cannot support WPA3 and establish a remediation timeline. Consider a separate SSID for legacy WPA2 clients rather than running mixed mode on the primary SSID.",
+      "_x_remediation": "Migrate to WPA3-only mode when all client devices support WPA3-SAE. In the interim, enable 802.11w (PMF) as mandatory — this prevents deauthentication-based downgrade forcing. Audit which clients cannot support WPA3 and establish a remediation timeline. Consider a separate SSID for legacy WPA2 clients rather than running mixed mode on the primary SSID.",
       "_x_references": [
         "CVE-2019-9494"
       ]
@@ -783,13 +783,13 @@
       "kev": false,
       "remediation_brief": "Change the WPA PSK to a strong, randomly-generated passphrase of at least 20 characters not present in any wordlist. Enable WPA3-SAE to replace PMKID-based authentication with the Dragonfly PAKE, which is resistant to offline attacks. If WPA3 is unavailable, enforce a minimum passphrase entropy equivalent to >128 bits (20+ random characters from a large charset).",
       "remediation_component": "",
-      "remediation_category": "",
+      "remediation_category": "Configuration",
       "remediation_effort": "",
       "validation_tools": [
         "Hashcat PMKID attack (2018): https://hashcat.net/forum/thread-7717.html"
       ],
       "description": "hcxdumptool captured a PMKID or EAPOL hash for the target SSID without requiring a connected client or deauthentication. The PMKID is derived as HMAC-SHA1(PMK, 'PMK Name' || AP_MAC || CLIENT_MAC) and is broadcast by the AP in the first EAPOL frame. The captured hash can be subjected to unlimited offline brute-force or dictionary attacks against the WPA PSK without further access to the network.",
-      "impact": "",
+      "impact": "An attacker could leverage this to gain significant unauthorized access, escalate privileges, or exfiltrate sensitive data from affected systems. Security misconfigurations expose unnecessary attack surface or weaken defensive controls.",
       "_x_severity": "HIGH",
       "_x_cvss_score": 6.8,
       "_x_category": "Wireless Authentication",
@@ -829,13 +829,13 @@
       "kev": false,
       "remediation_brief": "Migrate from PEAP/MSCHAPv2 to EAP-TLS with mutual certificate authentication, which is not susceptible to rogue AP credential capture. If MSCHAPv2 must remain in use, configure clients to validate the RADIUS server certificate against a pinned CA and reject connections on certificate mismatch. Immediately rotate all affected credentials and audit for unauthorized access using the cracked password.",
       "remediation_component": "",
-      "remediation_category": "",
+      "remediation_category": "Active Directory",
       "remediation_effort": "",
       "validation_tools": [
         "CVE-2012-2122"
       ],
       "description": "asleap successfully cracked the MSCHAPv2 challenge/response captured by EAPHammer's rogue AP. MSCHAPv2 is inherently weak: the challenge is 56-bit DES-based and the response leaks the NT hash, which can be cracked offline in hours on consumer hardware. The recovered plaintext password can be used for pass-the-hash attacks against Windows/Active Directory resources, VPN authentication, and other services using the same credential.",
-      "impact": "",
+      "impact": "An attacker could exploit this to gain full system compromise, execute arbitrary code, or obtain complete unauthorized access to sensitive data and systems.",
       "_x_severity": "CRITICAL",
       "_x_cvss_score": 8.8,
       "_x_category": "WPA-Enterprise / 802.1X",
@@ -846,7 +846,7 @@
     },
     {
       "id": "AETHER-019",
-      "title": "Wireless Vulnerability: Rogue AP \u2014 Clients Associated to Evil Twin",
+      "title": "Wireless Vulnerability: Rogue AP — Clients Associated to Evil Twin",
       "aliases": [],
       "source_tools": [
         "aether"
@@ -875,11 +875,11 @@
       "kev": false,
       "remediation_brief": "Deploy WPA3-SAE with PMF (802.11w) set to Required on all APs. Ensure clients validate network certificates where possible (WPA3-Enterprise or certificate-pinned supplicants). Implement wireless intrusion detection to alert on rogue APs. Educate users not to accept certificate warnings or dismiss security prompts on wireless networks.",
       "remediation_component": "",
-      "remediation_category": "",
+      "remediation_category": "Configuration",
       "remediation_effort": "",
       "validation_tools": [],
       "description": "One or more wireless clients associated to an attacker-controlled rogue AP that cloned the target SSID and BSSID. Clients that associate with the rogue AP have all their wireless traffic visible to the attacker; any unencrypted application-layer credentials or session tokens are exposed. Clients with stored network profiles are especially vulnerable as they connect automatically.",
-      "impact": "",
+      "impact": "An attacker could leverage this to gain significant unauthorized access, escalate privileges, or exfiltrate sensitive data from affected systems. Security misconfigurations expose unnecessary attack surface or weaken defensive controls.",
       "_x_catalogue_id": "rogue_ap_clients",
       "_x_severity": "HIGH",
       "_x_category": "Rogue AP / Evil Twin",
@@ -889,7 +889,7 @@
     },
     {
       "id": "AETHER-020",
-      "title": "Wireless Vulnerability: Rogue AP \u2014 WPA Pre-Shared Key Phished via Captive Portal",
+      "title": "Wireless Vulnerability: Rogue AP — WPA Pre-Shared Key Phished via Captive Portal",
       "aliases": [],
       "source_tools": [
         "aether"
@@ -918,11 +918,11 @@
       "kev": false,
       "remediation_brief": "Migrate to WPA3-SAE, which is not vulnerable to this class of credential phishing attack. As an interim control, restrict PSK distribution to trusted channels and train users to be suspicious of any captive portal requesting their Wi-Fi password. Enable WIDS/WIPS to detect and block rogue APs.",
       "remediation_component": "",
-      "remediation_category": "",
+      "remediation_category": "Configuration",
       "remediation_effort": "",
       "validation_tools": [],
       "description": "A client associated with the rogue AP and submitted a WPA PSK via a captive portal page that mimicked the target network's authentication interface. The submitted credential was validated against the captured PMKID and confirmed as the correct pre-shared key. This attack requires no prior knowledge of the PSK and succeeds whenever a user can be deceived into re-entering their credentials after an unexpected disconnection.",
-      "impact": "",
+      "impact": "An attacker could exploit this to gain full system compromise, execute arbitrary code, or obtain complete unauthorized access to sensitive data and systems. Security misconfigurations expose unnecessary attack surface or weaken defensive controls.",
       "_x_catalogue_id": "psk_phished",
       "_x_severity": "CRITICAL",
       "_x_category": "Rogue AP / Evil Twin",
@@ -932,7 +932,7 @@
     },
     {
       "id": "AETHER-021",
-      "title": "Wireless Vulnerability: KARMA / MANA Attack \u2014 Client Credentials Captured",
+      "title": "Wireless Vulnerability: KARMA / MANA Attack — Client Credentials Captured",
       "aliases": [],
       "source_tools": [
         "aether"
@@ -961,11 +961,11 @@
       "kev": false,
       "remediation_brief": "Configure client devices to send directed probe requests only (not broadcast) and to use random MAC addresses for probe requests. Disable auto-connect for open and low-trust networks. Enable PMF on all production networks. Ensure clients require server certificate validation before completing EAP authentication.",
       "remediation_component": "",
-      "remediation_category": "",
+      "remediation_category": "Configuration",
       "remediation_effort": "",
       "validation_tools": [],
       "description": "A KARMA/MANA rogue AP responded to probe requests from clients seeking previously associated networks and captured credentials from clients that automatically connected. This attack exploits devices that broadcast previously associated SSIDs in probe requests, allowing an attacker to impersonate any remembered network and intercept authentication material.",
-      "impact": "",
+      "impact": "An attacker could exploit this to gain full system compromise, execute arbitrary code, or obtain complete unauthorized access to sensitive data and systems. Security misconfigurations expose unnecessary attack surface or weaken defensive controls.",
       "_x_catalogue_id": "karma_credentials",
       "_x_severity": "CRITICAL",
       "_x_category": "Rogue AP / KARMA",
@@ -1004,11 +1004,11 @@
       "kev": false,
       "remediation_brief": "Enable PMF (802.11w) set to Required on all enterprise APs. WPA3 mandates PMF by default. Verify that both AP and client supplicant support and enforce PMF. On WPA2 networks, set ieee80211w=2 in hostapd configuration.",
       "remediation_component": "",
-      "remediation_category": "",
+      "remediation_category": "Configuration",
       "remediation_effort": "",
       "validation_tools": [],
       "description": "The target AP does not require Protected Management Frames (PMF/802.11w). A deauthentication or disassociation frame sent by an attacker was accepted by the AP or client, demonstrating that management frames are not authenticated. This allows an attacker in radio range to force client disconnections, enabling evil twin and MITM attacks.",
-      "impact": "",
+      "impact": "An attacker could potentially exploit this weakness to gain partial access, disclose sensitive information, or degrade the security posture of the affected system. Security misconfigurations expose unnecessary attack surface or weaken defensive controls.",
       "_x_catalogue_id": "pmf_not_enforced",
       "_x_severity": "MEDIUM",
       "_x_category": "Management Frame Protection",
@@ -1047,11 +1047,11 @@
       "kev": false,
       "remediation_brief": "Enable PMF Required (802.11w=2) to protect Action frames including BTM requests. Audit roaming policies and consider disabling 802.11v BTM on networks where roaming is not required. Upgrade affected clients and APs to firmware versions that validate BTM request authenticity.",
       "remediation_component": "",
-      "remediation_category": "",
+      "remediation_category": "Configuration",
       "remediation_effort": "",
       "validation_tools": [],
       "description": "A crafted BSS Transition Management (BTM) request (802.11v, Category 10 Action 7) was accepted by a client, causing it to roam to an attacker-specified BSSID. This attack allows an attacker to redirect clients to a rogue AP without deauthentication, potentially bypassing PMF protections on WPA2 networks that do not protect Action frames.",
-      "impact": "",
+      "impact": "An attacker could potentially exploit this weakness to gain partial access, disclose sensitive information, or degrade the security posture of the affected system. Security misconfigurations expose unnecessary attack surface or weaken defensive controls.",
       "_x_catalogue_id": "btm_hijack",
       "_x_severity": "MEDIUM",
       "_x_category": "Management Frame Attacks",
@@ -1061,7 +1061,7 @@
     },
     {
       "id": "AETHER-024",
-      "title": "Wireless Vulnerability: Client Probe Request Harvest \u2014 Remembered Network Disclosure",
+      "title": "Wireless Vulnerability: Client Probe Request Harvest — Remembered Network Disclosure",
       "aliases": [],
       "source_tools": [
         "aether"
@@ -1088,23 +1088,23 @@
       "searchsploit_terms": [],
       "metasploit_modules": [],
       "kev": false,
-      "remediation_brief": "Configure devices to send only directed probe requests to specific APs rather than broadcast probes for all remembered networks. Modern operating systems with MAC randomisation also suppress SSID disclosure in probes \u2014 ensure this feature is enabled. Remove outdated or low-trust networks from device preferred network lists.",
+      "remediation_brief": "Configure devices to send only directed probe requests to specific APs rather than broadcast probes for all remembered networks. Modern operating systems with MAC randomisation also suppress SSID disclosure in probes — ensure this feature is enabled. Remove outdated or low-trust networks from device preferred network lists.",
       "remediation_component": "",
-      "remediation_category": "",
+      "remediation_category": "Configuration",
       "remediation_effort": "",
       "validation_tools": [],
       "description": "Wireless clients in the vicinity are broadcasting probe requests containing the SSIDs of previously associated networks. This information discloses the wireless networks a device has connected to, can be used for device tracking (even with MAC randomisation if implementation is flawed), and enables targeted KARMA/evil twin attacks against those specific SSIDs.",
-      "impact": "",
+      "impact": "An attacker could use this information or weakness for reconnaissance or to facilitate more targeted attacks against the organization. Security misconfigurations expose unnecessary attack surface or weaken defensive controls.",
       "_x_catalogue_id": "probe_harvest",
       "_x_severity": "LOW",
       "_x_category": "Privacy / Information Disclosure",
-      "_x_remediation": "Configure devices to send only directed probe requests to specific APs rather than broadcast probes for all remembered networks. Modern operating systems with MAC randomisation also suppress SSID disclosure in probes \u2014 ensure this feature is enabled. Remove outdated or low-trust networks from device preferred network lists.",
+      "_x_remediation": "Configure devices to send only directed probe requests to specific APs rather than broadcast probes for all remembered networks. Modern operating systems with MAC randomisation also suppress SSID disclosure in probes — ensure this feature is enabled. Remove outdated or low-trust networks from device preferred network lists.",
       "_x_references": [],
       "_x_cvss_score": 3.7
     },
     {
       "id": "AETHER-025",
-      "title": "Wireless Vulnerability: EAP Downgrade \u2014 Weak EAP Method Credentials Captured",
+      "title": "Wireless Vulnerability: EAP Downgrade — Weak EAP Method Credentials Captured",
       "aliases": [],
       "source_tools": [
         "aether"
@@ -1133,11 +1133,11 @@
       "kev": false,
       "remediation_brief": "Lock client supplicants to a specific permitted EAP method and enforce server certificate validation. Disable weaker EAP types (PEAP/MSCHAPv2, EAP-FAST without PAC validation, EAP-MD5) at both the RADIUS server and client policy levels. Migrate to EAP-TLS with mutual certificate authentication where possible.",
       "remediation_component": "",
-      "remediation_category": "",
+      "remediation_category": "Cryptography",
       "remediation_effort": "",
       "validation_tools": [],
       "description": "EAPHammer with balanced negotiation captured credentials by accepting a weaker EAP method (e.g. PEAP/MSCHAPv2 or EAP-MD5) offered by a client whose supplicant was not locked to a specific EAP type. MSCHAPv2 hashes obtained this way can be cracked offline or relayed directly to Windows domain services without cracking.",
-      "impact": "",
+      "impact": "An attacker could exploit this to gain full system compromise, execute arbitrary code, or obtain complete unauthorized access to sensitive data and systems. Weak cryptographic implementations may allow interception, decryption, or forgery of protected communications.",
       "_x_catalogue_id": "eap_downgrade_creds",
       "_x_severity": "CRITICAL",
       "_x_category": "WPA-Enterprise / EAP Downgrade",
@@ -1147,7 +1147,7 @@
     },
     {
       "id": "AETHER-026",
-      "title": "Wireless Vulnerability: SAE Transition Mode \u2014 WPA2 Downgrade Attack Surface",
+      "title": "Wireless Vulnerability: SAE Transition Mode — WPA2 Downgrade Attack Surface",
       "aliases": [],
       "source_tools": [
         "aether"
@@ -1176,11 +1176,11 @@
       "kev": false,
       "remediation_brief": "Disable WPA3/WPA2 transition mode and enforce WPA3-SAE only once all clients support it. If transition mode is required, enable PMF Required (802.11w=2) on both the WPA2 and WPA3 BSSIDs. Implement WIDS to detect duplicate SSIDs advertising different security capabilities.",
       "remediation_component": "",
-      "remediation_category": "",
+      "remediation_category": "Configuration",
       "remediation_effort": "",
       "validation_tools": [],
       "description": "The target AP operates in WPA3/WPA2 transition mode and a WPA2-only rogue AP was created with the same SSID. Clients supporting both WPA3-SAE and WPA2-PSK may associate with the rogue WPA2-only AP, losing the security guarantees of SAE. This enables legacy WPA2 attacks including PMKID capture and handshake-based cracking against previously WPA3-protected clients.",
-      "impact": "",
+      "impact": "An attacker could potentially exploit this weakness to gain partial access, disclose sensitive information, or degrade the security posture of the affected system. Security misconfigurations expose unnecessary attack surface or weaken defensive controls.",
       "_x_catalogue_id": "sae_transition_downgrade",
       "_x_severity": "MEDIUM",
       "_x_category": "WPA3 / SAE Downgrade",
@@ -1190,7 +1190,7 @@
     },
     {
       "id": "AETHER-027",
-      "title": "Network Misconfiguration: ARP Cache Poisoning \u2014 MITM Position Established",
+      "title": "Network Misconfiguration: ARP Cache Poisoning — MITM Position Established",
       "aliases": [],
       "source_tools": [
         "aether"
@@ -1219,11 +1219,11 @@
       "kev": false,
       "remediation_brief": "Enable Dynamic ARP Inspection (DAI) on managed switches. Deploy HTTPS Strict Transport Security (HSTS) and HSTS preloading to prevent protocol downgrade. Ensure all internal services use TLS. On wireless networks, WPA3-SAE with PMF prevents the initial rogue AP association that enables this attack.",
       "remediation_component": "",
-      "remediation_category": "",
+      "remediation_category": "Network Security",
       "remediation_effort": "",
       "validation_tools": [],
       "description": "ARP cache poisoning was successfully performed on the rogue AP's subnet, placing the assessment system in a man-in-the-middle position between wireless clients and the gateway. All unencrypted traffic (HTTP, FTP, Telnet, legacy protocols) was readable, and encrypted traffic was subject to downgrade or stripping attacks. This demonstrates the risk of any attack scenario where a client can be induced to join an attacker-controlled network.",
-      "impact": "",
+      "impact": "An attacker could leverage this to gain significant unauthorized access, escalate privileges, or exfiltrate sensitive data from affected systems. Network-level vulnerabilities may allow traffic interception, lateral movement, or unauthorized service access.",
       "_x_catalogue_id": "arp_poison",
       "_x_severity": "HIGH",
       "_x_category": "Post-Connection / Network MITM",
@@ -1233,7 +1233,7 @@
     },
     {
       "id": "AETHER-028",
-      "title": "Uncategorized: LLMNR / NBT-NS Poisoning \u2014 NTLMv2 Hashes Captured",
+      "title": "Credential Capture: LLMNR / NBT-NS Poisoning — NTLMv2 Hashes Captured",
       "aliases": [],
       "source_tools": [
         "aether"
@@ -1260,17 +1260,17 @@
       "searchsploit_terms": [],
       "metasploit_modules": [],
       "kev": false,
-      "remediation_brief": "Disable LLMNR via Group Policy: Computer Configuration \u2192 Administrative Templates \u2192 Network \u2192 DNS Client \u2192 Turn Off Multicast Name Resolution = Enabled. Disable NBT-NS via WINS settings on the IPv4 adapter: disable NetBIOS over TCP/IP. Implement SMB signing to prevent NTLM relay attacks. Monitor for and alert on unexpected LLMNR/NBT-NS query responses.",
+      "remediation_brief": "Disable LLMNR via Group Policy: Computer Configuration → Administrative Templates → Network → DNS Client → Turn Off Multicast Name Resolution = Enabled. Disable NBT-NS via WINS settings on the IPv4 adapter: disable NetBIOS over TCP/IP. Implement SMB signing to prevent NTLM relay attacks. Monitor for and alert on unexpected LLMNR/NBT-NS query responses.",
       "remediation_component": "",
-      "remediation_category": "",
+      "remediation_category": "Network Security",
       "remediation_effort": "",
       "validation_tools": [],
       "description": "Responder successfully poisoned LLMNR (Link-Local Multicast Name Resolution) and/or NBT-NS (NetBIOS Name Service) queries on the rogue AP's subnet and captured NTLMv2 challenge/response hashes from Windows clients attempting to resolve non-existent hostnames. These hashes can be cracked offline or used in NTLM relay attacks to authenticate to internal services without cracking.",
-      "impact": "",
+      "impact": "An attacker could leverage this to gain significant unauthorized access, escalate privileges, or exfiltrate sensitive data from affected systems. Network-level vulnerabilities may allow traffic interception, lateral movement, or unauthorized service access.",
       "_x_catalogue_id": "llmnr_hashes",
       "_x_severity": "HIGH",
       "_x_category": "Post-Connection / Credential Capture",
-      "_x_remediation": "Disable LLMNR via Group Policy: Computer Configuration \u2192 Administrative Templates \u2192 Network \u2192 DNS Client \u2192 Turn Off Multicast Name Resolution = Enabled. Disable NBT-NS via WINS settings on the IPv4 adapter: disable NetBIOS over TCP/IP. Implement SMB signing to prevent NTLM relay attacks. Monitor for and alert on unexpected LLMNR/NBT-NS query responses.",
+      "_x_remediation": "Disable LLMNR via Group Policy: Computer Configuration → Administrative Templates → Network → DNS Client → Turn Off Multicast Name Resolution = Enabled. Disable NBT-NS via WINS settings on the IPv4 adapter: disable NetBIOS over TCP/IP. Implement SMB signing to prevent NTLM relay attacks. Monitor for and alert on unexpected LLMNR/NBT-NS query responses.",
       "_x_references": [],
       "_x_cvss_score": 8.0
     },
@@ -1303,17 +1303,17 @@
       "searchsploit_terms": [],
       "metasploit_modules": [],
       "kev": false,
-      "remediation_brief": "Implement network segmentation: place the wireless network in a dedicated VLAN with firewall rules restricting access to internal services. Apply the principle of least privilege \u2014 wireless clients should only be able to reach services required for their function. Disable unnecessary services on hosts and implement host-based firewalls.",
+      "remediation_brief": "Implement network segmentation: place the wireless network in a dedicated VLAN with firewall rules restricting access to internal services. Apply the principle of least privilege — wireless clients should only be able to reach services required for their function. Disable unnecessary services on hosts and implement host-based firewalls.",
       "remediation_component": "",
-      "remediation_category": "",
+      "remediation_category": "Configuration",
       "remediation_effort": "",
       "validation_tools": [],
       "description": "An nmap scan of the wireless subnet revealed live hosts and open services accessible to wireless clients. This establishes the attack surface available to any client (authorised or rogue) that connects to the wireless network. Services accessible from the wireless segment without additional segmentation represent a potential lateral movement path.",
-      "impact": "",
+      "impact": "This finding provides informational context about the environment useful for security assessment and hardening. Security misconfigurations expose unnecessary attack surface or weaken defensive controls.",
       "_x_catalogue_id": "internal_hosts",
       "_x_severity": "INFO",
       "_x_category": "Post-Connection / Network Discovery",
-      "_x_remediation": "Implement network segmentation: place the wireless network in a dedicated VLAN with firewall rules restricting access to internal services. Apply the principle of least privilege \u2014 wireless clients should only be able to reach services required for their function. Disable unnecessary services on hosts and implement host-based firewalls.",
+      "_x_remediation": "Implement network segmentation: place the wireless network in a dedicated VLAN with firewall rules restricting access to internal services. Apply the principle of least privilege — wireless clients should only be able to reach services required for their function. Disable unnecessary services on hosts and implement host-based firewalls.",
       "_x_references": [],
       "_x_cvss_score": 0.0
     },
@@ -1346,23 +1346,23 @@
       "searchsploit_terms": [],
       "metasploit_modules": [],
       "kev": false,
-      "remediation_brief": "Disable TKIP and require CCMP (AES) as the only permitted pairwise cipher. Set rsn_pairwise=CCMP and wpa_pairwise=CCMP in hostapd configuration, or equivalent settings in the AP's admin interface. Remove WPA1/TKIP-only client support \u2014 all modern clients support CCMP.",
+      "remediation_brief": "Disable TKIP and require CCMP (AES) as the only permitted pairwise cipher. Set rsn_pairwise=CCMP and wpa_pairwise=CCMP in hostapd configuration, or equivalent settings in the AP's admin interface. Remove WPA1/TKIP-only client support — all modern clients support CCMP.",
       "remediation_component": "",
-      "remediation_category": "",
+      "remediation_category": "Configuration",
       "remediation_effort": "",
       "validation_tools": [],
       "description": "The target network uses TKIP (Temporal Key Integrity Protocol), a deprecated encryption scheme that was introduced as a quick fix for WEP and was officially deprecated by the IEEE 802.11 standard in 2012. TKIP is vulnerable to the Beck-Tews and Ohigashi-Morii attacks (ChopChop/fragmentation), allowing an attacker to partially decrypt and inject short packets without the key.",
-      "impact": "",
+      "impact": "An attacker could potentially exploit this weakness to gain partial access, disclose sensitive information, or degrade the security posture of the affected system. Security misconfigurations expose unnecessary attack surface or weaken defensive controls.",
       "_x_catalogue_id": "tkip_detected",
       "_x_severity": "MEDIUM",
       "_x_category": "Legacy / Deprecated Encryption",
-      "_x_remediation": "Disable TKIP and require CCMP (AES) as the only permitted pairwise cipher. Set rsn_pairwise=CCMP and wpa_pairwise=CCMP in hostapd configuration, or equivalent settings in the AP's admin interface. Remove WPA1/TKIP-only client support \u2014 all modern clients support CCMP.",
+      "_x_remediation": "Disable TKIP and require CCMP (AES) as the only permitted pairwise cipher. Set rsn_pairwise=CCMP and wpa_pairwise=CCMP in hostapd configuration, or equivalent settings in the AP's admin interface. Remove WPA1/TKIP-only client support — all modern clients support CCMP.",
       "_x_references": [],
       "_x_cvss_score": 5.9
     },
     {
       "id": "AETHER-031",
-      "title": "Wireless Vulnerability: TKIP ChopChop / Fragmentation Attack \u2014 Packet Decryption Confirmed",
+      "title": "Wireless Vulnerability: TKIP ChopChop / Fragmentation Attack — Packet Decryption Confirmed",
       "aliases": [],
       "source_tools": [
         "aether"
@@ -1391,11 +1391,11 @@
       "kev": false,
       "remediation_brief": "Immediately disable TKIP. Migrate the network to WPA2 or WPA3 using only CCMP (AES) as the pairwise cipher. Do not allow TKIP as a fallback cipher for any client.",
       "remediation_component": "",
-      "remediation_category": "",
+      "remediation_category": "Configuration",
       "remediation_effort": "",
       "validation_tools": [],
       "description": "A TKIP ChopChop or fragmentation attack (Beck-Tews / Ohigashi-Morii) was confirmed against the target network. An attacker can exploit this to decrypt the last 12 bytes of an arbitrary short packet without knowing the key, and to inject up to 7 or 14 bytes of attacker-chosen plaintext per minute. This enables ARP poisoning, DNS spoofing, and decryption of short high-value packets (e.g. ARP replies, DNS responses) on WPA-TKIP networks.",
-      "impact": "",
+      "impact": "An attacker could leverage this to gain significant unauthorized access, escalate privileges, or exfiltrate sensitive data from affected systems. Security misconfigurations expose unnecessary attack surface or weaken defensive controls.",
       "_x_catalogue_id": "tkip_chopchop",
       "_x_severity": "HIGH",
       "_x_category": "Legacy / Deprecated Encryption",
@@ -1434,11 +1434,11 @@
       "kev": false,
       "remediation_brief": "Disable Wi-Fi Direct on corporate devices via MDM or Group Policy where the feature is not required. If Wi-Fi Direct is necessary, ensure WPS-PIN is disabled and only WPS-PBC (push button) is permitted. Audit firmware for Wi-Fi Direct devices and apply vendor security updates.",
       "remediation_component": "",
-      "remediation_category": "",
+      "remediation_category": "Configuration",
       "remediation_effort": "",
       "validation_tools": [],
       "description": "A Wi-Fi Direct (P2P) capable device was discovered in the assessment area. Wi-Fi Direct devices create their own access point interfaces and may accept WPS-PIN connections independently of the corporate wireless infrastructure, bypassing network access controls and firewall policies. If WPS-PIN is enabled, the device may be vulnerable to the Pixie Dust or online WPS brute-force attacks.",
-      "impact": "",
+      "impact": "An attacker could use this information or weakness for reconnaissance or to facilitate more targeted attacks against the organization. Security misconfigurations expose unnecessary attack surface or weaken defensive controls.",
       "_x_catalogue_id": "wifidirect_found",
       "_x_severity": "LOW",
       "_x_category": "Wi-Fi Direct / WPS",
@@ -1448,7 +1448,7 @@
     },
     {
       "id": "AETHER-033",
-      "title": "Wireless Vulnerability: Wi-Fi Direct WPS PIN Cracked \u2014 Device Compromised",
+      "title": "Wireless Vulnerability: Wi-Fi Direct WPS PIN Cracked — Device Compromised",
       "aliases": [],
       "source_tools": [
         "aether"
@@ -1477,11 +1477,11 @@
       "kev": false,
       "remediation_brief": "Disable WPS on all Wi-Fi Direct capable devices. If WPS must remain enabled for operational reasons, disable PIN mode and use only WPS-PBC (push button) with physical access controls. Apply vendor firmware updates to devices vulnerable to Pixie Dust.",
       "remediation_component": "",
-      "remediation_category": "",
+      "remediation_category": "Configuration",
       "remediation_effort": "",
       "validation_tools": [],
       "description": "The WPS PIN for a Wi-Fi Direct device was recovered via reaver or a Pixie Dust offline attack. An attacker with this PIN can authenticate to the device's P2P group owner and gain network-level access to the device, potentially enabling access to shared files, printers, or other services exposed over the P2P connection.",
-      "impact": "",
+      "impact": "An attacker could leverage this to gain significant unauthorized access, escalate privileges, or exfiltrate sensitive data from affected systems. Security misconfigurations expose unnecessary attack surface or weaken defensive controls.",
       "_x_catalogue_id": "wifidirect_wps_cracked",
       "_x_severity": "HIGH",
       "_x_category": "Wi-Fi Direct / WPS",
@@ -1562,7 +1562,7 @@
         "dig"
       ],
       "description": "Unauthenticated clients on the open SSID can resolve arbitrary hostnames via external DNS resolvers (e.g. 1.1.1.1, 8.8.8.8) before completing captive portal authentication. The portal is enforcing only at the HTTP/HTTPS layer.",
-      "impact": "DNS leakage pre-auth is the foundation for DNS tunneling (iodine, dnscat2) \u2014 an attacker can establish a full-duplex tunnel encapsulating arbitrary IP traffic in DNS queries, completely bypassing the portal's billing, AAA, and content controls. Often invisible to the portal vendor's logging because DNS query payloads are not inspected.",
+      "impact": "DNS leakage pre-auth is the foundation for DNS tunneling (iodine, dnscat2) — an attacker can establish a full-duplex tunnel encapsulating arbitrary IP traffic in DNS queries, completely bypassing the portal's billing, AAA, and content controls. Often invisible to the portal vendor's logging because DNS query payloads are not inspected.",
       "_x_catalogue_id": "AETHER-CAP-DNS-EXTERNAL",
       "_x_severity": "HIGH",
       "_x_category": "Captive Portal / Access Control"
@@ -1788,7 +1788,7 @@
       "searchsploit_terms": [],
       "metasploit_modules": [],
       "kev": false,
-      "remediation_brief": "HTTPS bypass is harder for portals to intercept than HTTP because TLS cannot be transparently redirected \u2014 block port 443 outbound from the unauthenticated VLAN entirely until authentication completes. Inspect the captive portal vendor's documentation for the 'block all egress until auth' or 'pre-authentication firewall mode' setting.",
+      "remediation_brief": "HTTPS bypass is harder for portals to intercept than HTTP because TLS cannot be transparently redirected — block port 443 outbound from the unauthenticated VLAN entirely until authentication completes. Inspect the captive portal vendor's documentation for the 'block all egress until auth' or 'pre-authentication firewall mode' setting.",
       "remediation_component": "Network",
       "remediation_category": "Access Control",
       "remediation_effort": "Easy",
@@ -1863,7 +1863,7 @@
       "searchsploit_terms": [],
       "metasploit_modules": [],
       "kev": false,
-      "remediation_brief": "Apply identical pre-authentication filtering rules to BOTH IPv4 and IPv6 traffic on the guest VLAN. Many captive portal vendors only filter IPv4 by default \u2014 IPv6 advertisements (RAs) leak the v6 prefix to clients which then route around the portal entirely. Either: (a) disable IPv6 on the guest VLAN (RA Guard + suppress RAs), or (b) deploy matching ip6tables/PBR rules. PCI-DSS 4.0 \u00a71.4.5 explicitly requires controls on all network protocols including IPv6.",
+      "remediation_brief": "Apply identical pre-authentication filtering rules to BOTH IPv4 and IPv6 traffic on the guest VLAN. Many captive portal vendors only filter IPv4 by default — IPv6 advertisements (RAs) leak the v6 prefix to clients which then route around the portal entirely. Either: (a) disable IPv6 on the guest VLAN (RA Guard + suppress RAs), or (b) deploy matching ip6tables/PBR rules. PCI-DSS 4.0 §1.4.5 explicitly requires controls on all network protocols including IPv6.",
       "remediation_component": "Network",
       "remediation_category": "Access Control",
       "remediation_effort": "Moderate",
@@ -1872,7 +1872,7 @@
         "curl"
       ],
       "description": "Direct outbound traffic over IPv6 succeeded from an unauthenticated client on the open SSID, while IPv4 traffic was (or would have been) intercepted by the captive portal. This is the classic dual-stack misconfiguration: the portal filters v4 only.",
-      "impact": "The portal's entire access control model is bypassed via IPv6. Unauthenticated clients have full internet access without billing, AAA, or content controls \u2014 only via v6. Often invisible in portal vendor consoles that report v4-only statistics. Because v6 connectivity to major content destinations (Cloudflare, Google, Apple, AWS) is widely available, this is a fully practical bypass.",
+      "impact": "The portal's entire access control model is bypassed via IPv6. Unauthenticated clients have full internet access without billing, AAA, or content controls — only via v6. Often invisible in portal vendor consoles that report v4-only statistics. Because v6 connectivity to major content destinations (Cloudflare, Google, Apple, AWS) is widely available, this is a fully practical bypass.",
       "_x_catalogue_id": "AETHER-CAP-IPV6",
       "_x_severity": "HIGH",
       "_x_category": "Captive Portal / Access Control"
@@ -1908,11 +1908,11 @@
       "kev": false,
       "remediation_brief": "Enforce captive portal controls at the IP layer rather than relying solely on DNS. Block all outbound DNS except to the captive portal resolver. Implement MAC address validation in conjunction with IP binding and session tokens. Use HTTPS for the captive portal itself to prevent credential interception.",
       "remediation_component": "",
-      "remediation_category": "",
+      "remediation_category": "Configuration",
       "remediation_effort": "",
       "validation_tools": [],
       "description": "The target captive portal was bypassed using one or more techniques: DNS tunnelling (exfiltrating data via DNS queries to an external resolver), MAC address spoofing (cloning the MAC of an already-authenticated client), or direct HTTPS access to allowed domains before portal authentication. This allows an attacker to gain full internet access without completing the required authentication or payment flow.",
-      "impact": "",
+      "impact": "An attacker could potentially exploit this weakness to gain partial access, disclose sensitive information, or degrade the security posture of the affected system. Security misconfigurations expose unnecessary attack surface or weaken defensive controls.",
       "_x_catalogue_id": "captive_bypass",
       "_x_severity": "MEDIUM",
       "_x_category": "Captive Portal / Access Control",
@@ -2043,7 +2043,7 @@
       "validation_tools": [
         "aether"
       ],
-      "description": "The RADIUS server certificate is self-signed (Subject == Issuer) or issued by a CA not present in the standard public root store. While valid for internal deployments, this requires every client to be explicitly configured to trust the specific cert or CA \u2014 a common misconfiguration vector.",
+      "description": "The RADIUS server certificate is self-signed (Subject == Issuer) or issued by a CA not present in the standard public root store. While valid for internal deployments, this requires every client to be explicitly configured to trust the specific cert or CA — a common misconfiguration vector.",
       "impact": "Clients with poor cert-validation configuration (\"Trust Any Certificate\" or no CA pin) will accept ANY self-signed cert presented by a rogue authenticator. Evil-twin attacks become trivially successful."
     },
     {
@@ -2084,7 +2084,7 @@
       "validation_tools": [
         "aether"
       ],
-      "description": "The Issuer field of the RADIUS server certificate contains terms suggesting an internal Certificate Authority (e.g., CN=corp-CA-01, CN=AD-CA, CN=Internal-Root). This is informational reconnaissance value \u2014 it confirms the existence and naming convention of an internal PKI.",
+      "description": "The Issuer field of the RADIUS server certificate contains terms suggesting an internal Certificate Authority (e.g., CN=corp-CA-01, CN=AD-CA, CN=Internal-Root). This is informational reconnaissance value — it confirms the existence and naming convention of an internal PKI.",
       "impact": "An attacker learns the internal CA naming convention, which feeds into Active Directory / network-topology reconnaissance. Combined with other findings (cert SAN disclosure, EAP identity leakage) the attacker maps the corporate auth infrastructure without authenticated access."
     },
     {
@@ -2159,7 +2159,7 @@
       "kev": false,
       "remediation_brief": "Maintain the current certificate-management posture. Document the issuance procedure in the operations runbook to ensure replacements maintain the same standards.",
       "remediation_component": "Wireless",
-      "remediation_category": "Detection",
+      "remediation_category": "Logging and Monitoring",
       "remediation_effort": "n/a",
       "validation_tools": [
         "aether"
@@ -2196,9 +2196,9 @@
       "searchsploit_terms": [],
       "metasploit_modules": [],
       "kev": false,
-      "remediation_brief": "No action required \u2014 informational only. Cross-reference with findings AETHER-CERT-001 through AETHER-CERT-006 for the grading outcome.",
+      "remediation_brief": "No action required — informational only. Cross-reference with findings AETHER-CERT-001 through AETHER-CERT-006 for the grading outcome.",
       "remediation_component": "Wireless",
-      "remediation_category": "Documentation",
+      "remediation_category": "Compliance",
       "remediation_effort": "n/a",
       "validation_tools": [
         "aether"
@@ -2238,7 +2238,7 @@
       "searchsploit_terms": [],
       "metasploit_modules": [],
       "kev": false,
-      "remediation_brief": "Configure all supplicants to use an anonymous outer identity. On Windows GPO: Wireless Network (IEEE 802.11) Policies \u2192 properties \u2192 Security \u2192 Settings \u2192 Advanced \u2192 Enable Identity Privacy. On Linux NetworkManager: anonymous_identity setting. On macOS / iOS: configure via MDM profile.",
+      "remediation_brief": "Configure all supplicants to use an anonymous outer identity. On Windows GPO: Wireless Network (IEEE 802.11) Policies → properties → Security → Settings → Advanced → Enable Identity Privacy. On Linux NetworkManager: anonymous_identity setting. On macOS / iOS: configure via MDM profile.",
       "remediation_component": "Wireless",
       "remediation_category": "Configuration",
       "remediation_effort": "Moderate",
@@ -2360,14 +2360,14 @@
       "searchsploit_terms": [],
       "metasploit_modules": [],
       "kev": false,
-      "remediation_brief": "No action required \u2014 informational only. Cross-reference with the Meraki advisory feed for the identified product line to verify the firmware in use is patched against known issues.",
+      "remediation_brief": "No action required — informational only. Cross-reference with the Meraki advisory feed for the identified product line to verify the firmware in use is patched against known issues.",
       "remediation_component": "Wireless",
-      "remediation_category": "Documentation",
+      "remediation_category": "Compliance",
       "remediation_effort": "n/a",
       "validation_tools": [
         "aether"
       ],
-      "description": "One or more wireless APs in scope identified as Cisco-Meraki by MAC OUI prefix or vendor-specific IE pattern. Contextual recon \u2014 establishes the vendor / product family for the rest of the assessment.",
+      "description": "One or more wireless APs in scope identified as Cisco-Meraki by MAC OUI prefix or vendor-specific IE pattern. Contextual recon — establishes the vendor / product family for the rest of the assessment.",
       "impact": "Drives vendor-specific test selection (iPSK testing, Systems Manager enrollment recon, Meraki-specific firmware advisories cross-reference)."
     },
     {
@@ -2399,7 +2399,7 @@
       "searchsploit_terms": [],
       "metasploit_modules": [],
       "kev": false,
-      "remediation_brief": "No action \u2014 informational only.",
+      "remediation_brief": "No action — informational only.",
       "remediation_component": "Wireless",
       "remediation_category": "Configuration",
       "remediation_effort": "n/a",
@@ -2440,7 +2440,7 @@
       "kev": false,
       "remediation_brief": "Verify VLAN isolation between all SSIDs on the same physical AP. Test from the weakest SSID to ensure no lateral movement is possible to the cert-auth segment.",
       "remediation_component": "Wireless",
-      "remediation_category": "Documentation",
+      "remediation_category": "Compliance",
       "remediation_effort": "n/a",
       "validation_tools": [
         "aether"
@@ -2477,7 +2477,7 @@
       "searchsploit_terms": [],
       "metasploit_modules": [],
       "kev": false,
-      "remediation_brief": "No action \u2014 informational only.",
+      "remediation_brief": "No action — informational only.",
       "remediation_component": "Wireless",
       "remediation_category": "Configuration",
       "remediation_effort": "n/a",
@@ -2528,12 +2528,12 @@
       "validation_tools": [
         "aether"
       ],
-      "description": "On a Meraki SSID using Identity PSK (iPSK), the test confirmed that authentication is keyed primarily on MAC address \u2014 spoofing a known iPSK-issued MAC inherits the PSK assigned to the original device.",
+      "description": "On a Meraki SSID using Identity PSK (iPSK), the test confirmed that authentication is keyed primarily on MAC address — spoofing a known iPSK-issued MAC inherits the PSK assigned to the original device.",
       "impact": "An attacker who observes a single legitimate device's MAC address can clone the MAC and authenticate to the SSID using the inherited PSK without ever cracking it. Effectively eliminates the per-device PSK assumption."
     },
     {
       "id": "AETHER-IPSK-002",
-      "title": "Wireless Misconfiguration: iPSK Suspected \u2014 Per-Client PMKID Variance Observed",
+      "title": "Wireless Misconfiguration: iPSK Suspected — Per-Client PMKID Variance Observed",
       "aliases": [],
       "source_tools": [
         "aether"
@@ -2560,7 +2560,7 @@
       "searchsploit_terms": [],
       "metasploit_modules": [],
       "kev": false,
-      "remediation_brief": "No action \u2014 informational confirmation. Use as supporting evidence for AETHER-IPSK-001 and AETHER-IPSK-003 findings.",
+      "remediation_brief": "No action — informational confirmation. Use as supporting evidence for AETHER-IPSK-001 and AETHER-IPSK-003 findings.",
       "remediation_component": "Wireless",
       "remediation_category": "Configuration",
       "remediation_effort": "n/a",
@@ -2606,7 +2606,7 @@
       "validation_tools": [
         "aether"
       ],
-      "description": "An iPSK SSID shares a physical AP with a cert-authenticated SSID. The wireless infrastructure security posture is now bounded by the WEAKER of the two \u2014 if VLAN isolation is misconfigured, compromise of iPSK leads to access in the cert-auth segment's broadcast domain.",
+      "description": "An iPSK SSID shares a physical AP with a cert-authenticated SSID. The wireless infrastructure security posture is now bounded by the WEAKER of the two — if VLAN isolation is misconfigured, compromise of iPSK leads to access in the cert-auth segment's broadcast domain.",
       "impact": "The cert-auth SSID's strong authentication is only as effective as the network segmentation it sits behind. iPSK-derived access can become lateral movement opportunity."
     },
     {
@@ -2650,7 +2650,7 @@
     },
     {
       "id": "AETHER-SPLASH-002",
-      "title": "Captive Portal: Captive Portal DNS Bypass \u2014 External Resolution Pre-Auth",
+      "title": "Captive Portal: Captive Portal DNS Bypass — External Resolution Pre-Auth",
       "aliases": [],
       "source_tools": [
         "aether"
@@ -2693,7 +2693,7 @@
     },
     {
       "id": "AETHER-SPLASH-003",
-      "title": "Captive Portal: Captive Portal ICMP Bypass \u2014 External Echo Pre-Auth",
+      "title": "Captive Portal: Captive Portal ICMP Bypass — External Echo Pre-Auth",
       "aliases": [],
       "source_tools": [
         "aether"
@@ -2798,9 +2798,9 @@
       "searchsploit_terms": [],
       "metasploit_modules": [],
       "kev": false,
-      "remediation_brief": "No action \u2014 informational only.",
+      "remediation_brief": "No action — informational only.",
       "remediation_component": "Wireless",
-      "remediation_category": "Documentation",
+      "remediation_category": "Compliance",
       "remediation_effort": "n/a",
       "validation_tools": [
         "aether"
@@ -2837,9 +2837,9 @@
       "searchsploit_terms": [],
       "metasploit_modules": [],
       "kev": false,
-      "remediation_brief": "No action \u2014 informational only.",
+      "remediation_brief": "No action — informational only.",
       "remediation_component": "Wireless",
-      "remediation_category": "Documentation",
+      "remediation_category": "Compliance",
       "remediation_effort": "n/a",
       "validation_tools": [
         "aether"
@@ -2876,7 +2876,7 @@
       "searchsploit_terms": [],
       "metasploit_modules": [],
       "kev": false,
-      "remediation_brief": "No action \u2014 informational only.",
+      "remediation_brief": "No action — informational only.",
       "remediation_component": "Wireless",
       "remediation_category": "Configuration",
       "remediation_effort": "n/a",
@@ -2915,7 +2915,7 @@
       "searchsploit_terms": [],
       "metasploit_modules": [],
       "kev": false,
-      "remediation_brief": "No action \u2014 informational only. Review the auth type distribution across the deployment for consistency with the documented security architecture.",
+      "remediation_brief": "No action — informational only. Review the auth type distribution across the deployment for consistency with the documented security architecture.",
       "remediation_component": "Wireless",
       "remediation_category": "Configuration",
       "remediation_effort": "n/a",
@@ -2954,7 +2954,7 @@
       "searchsploit_terms": [],
       "metasploit_modules": [],
       "kev": false,
-      "remediation_brief": "No action \u2014 informational only.",
+      "remediation_brief": "No action — informational only.",
       "remediation_component": "Wireless",
       "remediation_category": "Configuration",
       "remediation_effort": "n/a",
@@ -3000,7 +3000,7 @@
       "validation_tools": [
         "aether"
       ],
-      "description": "A client device sent a probe request asking for a specific SSID. Probed SSIDs reveal the client's Preferred Network List \u2014 useful for Karma attacks and for assessing employees' personal device-to-corporate-network proximity.",
+      "description": "A client device sent a probe request asking for a specific SSID. Probed SSIDs reveal the client's Preferred Network List — useful for Karma attacks and for assessing employees' personal device-to-corporate-network proximity.",
       "impact": "Builds the input set for Karma-style opportunistic AP responses. Reveals corporate device usage patterns (e.g., probes for home networks, conference networks, partner-org networks)."
     },
     {
@@ -3069,7 +3069,7 @@
       "searchsploit_terms": [],
       "metasploit_modules": [],
       "kev": false,
-      "remediation_brief": "Standardise authentication mode across every AP broadcasting a given SSID. The strongest configured auth mode should be the only mode \u2014 a single AP using a weaker mode (e.g. WPA2-PSK on an SSID otherwise served by WPA3-SAE or WPA2-Enterprise) means an attacker can target the weaker AP for the same SSID name and bypass the stronger protections entirely. Audit the WLAN controller's per-AP policy bindings; verify intentional WPA2/WPA3 transition mode is configured uniformly rather than per-AP.",
+      "remediation_brief": "Standardise authentication mode across every AP broadcasting a given SSID. The strongest configured auth mode should be the only mode — a single AP using a weaker mode (e.g. WPA2-PSK on an SSID otherwise served by WPA3-SAE or WPA2-Enterprise) means an attacker can target the weaker AP for the same SSID name and bypass the stronger protections entirely. Audit the WLAN controller's per-AP policy bindings; verify intentional WPA2/WPA3 transition mode is configured uniformly rather than per-AP.",
       "remediation_component": "Wireless",
       "remediation_category": "Authentication",
       "remediation_effort": "Moderate",
@@ -3113,7 +3113,7 @@
       "searchsploit_terms": [],
       "metasploit_modules": [],
       "kev": false,
-      "remediation_brief": "No action \u2014 informational. Cross-reference with AETHER-EAPTLS-001 for the grading outcome.",
+      "remediation_brief": "No action — informational. Cross-reference with AETHER-EAPTLS-001 for the grading outcome.",
       "remediation_component": "Wireless",
       "remediation_category": "Configuration",
       "remediation_effort": "n/a",
@@ -3253,7 +3253,7 @@
       "searchsploit_terms": [],
       "metasploit_modules": [],
       "kev": false,
-      "remediation_brief": "No action \u2014 informational only. LAA detection flags BSSIDs where OUI-based vendor identification is unreliable, prompting use of alternative fingerprinting methods.",
+      "remediation_brief": "No action — informational only. LAA detection flags BSSIDs where OUI-based vendor identification is unreliable, prompting use of alternative fingerprinting methods.",
       "remediation_component": "Wireless",
       "remediation_category": "Configuration",
       "remediation_effort": "n/a",
@@ -3295,7 +3295,7 @@
       "searchsploit_terms": [],
       "metasploit_modules": [],
       "kev": false,
-      "remediation_brief": "No action \u2014 informational only. Vendor-Specific Information Elements in 802.11 beacons leak manufacturer identity even when the BSSID is randomized.",
+      "remediation_brief": "No action — informational only. Vendor-Specific Information Elements in 802.11 beacons leak manufacturer identity even when the BSSID is randomized.",
       "remediation_component": "Wireless",
       "remediation_category": "Configuration",
       "remediation_effort": "n/a",
@@ -3383,7 +3383,7 @@
       "searchsploit_terms": [],
       "metasploit_modules": [],
       "kev": false,
-      "remediation_brief": "No action \u2014 informational only. This aggregated finding represents the best-confidence vendor/model identification from all available passive sources (WPS, VS IEs, OUI database, wash chipset).",
+      "remediation_brief": "No action — informational only. This aggregated finding represents the best-confidence vendor/model identification from all available passive sources (WPS, VS IEs, OUI database, wash chipset).",
       "remediation_component": "Wireless",
       "remediation_category": "Configuration",
       "remediation_effort": "n/a",
@@ -3395,7 +3395,7 @@
     },
     {
       "id": "AETHER-FW-CVE",
-      "title": "Firmware Risk: {vendor} {model} \u2014 Known CVE Match",
+      "title": "Firmware Risk: {vendor} {model} — Known CVE Match",
       "aliases": [
         "firmware vulnerability",
         "wireless firmware CVE",
@@ -3474,11 +3474,11 @@
         "nessus"
       ],
       "description": "The identified access point vendor and model match a known firmware vulnerability in the wireless vulnerability database. The finding is correlated from the AP's fingerprint (vendor, model) against published CVEs affecting that hardware family. Risk is inherited from the matched CVE; actual exploitability depends on the running firmware version, which passive fingerprinting cannot determine with certainty.",
-      "impact": "An attacker within wireless range could exploit the identified firmware vulnerability to gain unauthorized access to the access point, intercept wireless traffic, pivot into the wired network, or cause denial of service. The severity depends on the specific CVE \u2014 RCE vulnerabilities allow full device compromise while information disclosure may expose credentials or configuration."
+      "impact": "An attacker within wireless range could exploit the identified firmware vulnerability to gain unauthorized access to the access point, intercept wireless traffic, pivot into the wired network, or cause denial of service. The severity depends on the specific CVE — RCE vulnerabilities allow full device compromise while information disclosure may expose credentials or configuration."
     },
     {
       "id": "AETHER-FW-DEFCRED",
-      "title": "Default Credentials: {vendor} {model} \u2014 {service}",
+      "title": "Default Credentials: {vendor} {model} — {service}",
       "aliases": [
         "default password",
         "factory credentials",
@@ -3797,7 +3797,7 @@
       "searchsploit_terms": [],
       "metasploit_modules": [],
       "kev": false,
-      "remediation_brief": "Disable WPA (version 1) and TKIP on all access points. Configure WPA2 with AES-CCMP as the minimum supported protocol. Upgrade or replace any legacy client devices that require WPA1/TKIP \u2014 these devices are end-of-life and should not be on production networks. Prefer WPA3-SAE where hardware supports it.",
+      "remediation_brief": "Disable WPA (version 1) and TKIP on all access points. Configure WPA2 with AES-CCMP as the minimum supported protocol. Upgrade or replace any legacy client devices that require WPA1/TKIP — these devices are end-of-life and should not be on production networks. Prefer WPA3-SAE where hardware supports it.",
       "remediation_component": "Network",
       "remediation_category": "Cryptography",
       "remediation_effort": "Moderate",
@@ -3886,7 +3886,7 @@
         "asleap"
       ],
       "description": "The enterprise wireless network uses PEAP with MSCHAPv2 as the inner authentication method. MSCHAPv2 relies on NT hash-based challenge-response, which is cryptographically equivalent to a single DES operation. A captured MSCHAPv2 exchange can be reduced to a DES key search and cracked in under 24 hours on commodity hardware. If clients do not validate the RADIUS server certificate, an evil-twin attack can harvest MSCHAPv2 hashes directly.",
-      "impact": "An attacker who sets up a rogue AP (evil-twin) can harvest MSCHAPv2 challenge-response pairs from connecting clients without their knowledge. These hashes can be cracked offline to recover domain credentials. Successful cracking yields the user's NT hash, which enables pass-the-hash attacks, lateral movement, and potentially domain compromise \u2014 the impact extends well beyond wireless access."
+      "impact": "An attacker who sets up a rogue AP (evil-twin) can harvest MSCHAPv2 challenge-response pairs from connecting clients without their knowledge. These hashes can be cracked offline to recover domain credentials. Successful cracking yields the user's NT hash, which enables pass-the-hash attacks, lateral movement, and potentially domain compromise — the impact extends well beyond wireless access."
     }
   ],
   "newly_scaffolded_certauth": 28

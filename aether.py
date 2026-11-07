@@ -5531,7 +5531,7 @@ def phase_post_connection(ap_iface: str, output_dir: Path,
                         data={"hashes_captured": len(captured_hashes),
                               "interface": ap_iface},
                         output_file=str(resp_log),
-                        title_override="Uncategorized: LLMNR/NBT-NS Credential Hashes Captured",
+                        title_override="Credential Capture: LLMNR/NBT-NS Credential Hashes Captured",
                     )
                     log(f"Phase 10b: {len(captured_hashes)} hash file(s) captured")
                 else:
