@@ -952,9 +952,30 @@ def parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 
+def _check_prereqs():
+    """Verify required system tools are present before attempting install."""
+    REQUIRED = [
+        ("git",  "git — required for cloning tool repositories"),
+        ("pip3", "pip3 — required for Python packages (apt: python3-pip)"),
+        ("curl", "curl — required for downloading assets"),
+    ]
+    missing = []
+    for binary, desc in REQUIRED:
+        if not shutil.which(binary):
+            missing.append(f"  ✗ {binary}  ({desc})")
+    if missing:
+        print(f"\nERROR: Missing required prerequisites:\n")
+        for m in missing:
+            print(m)
+        print(f"\nInstall them first, then re-run install.py.\n")
+        sys.exit(1)
+
+
 def main() -> None:
     # Line-buffer stdout so phase headers appear before subprocess output in logs
     sys.stdout.reconfigure(line_buffering=True)
+
+    _check_prereqs()
 
     args = parse_args()
     dry_run = args.check
