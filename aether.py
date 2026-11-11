@@ -226,6 +226,14 @@ def _init_fdb():
 
 # ── Output protocol ───────────────────────────────────────────────────────────
 _MANAGED = os.environ.get("CRUCIBLE_MANAGED", "") == "1"
+
+try:
+    import sys as _sys_ie
+    if "/opt/pr0t31n/shared" not in _sys_ie.path:
+        _sys_ie.path.insert(0, "/opt/pr0t31n/shared")
+    import pr0t31n_intel_emitter as _ie
+except ImportError:
+    _ie = None
 _log_fh = None  # opened in main() once the project dir is known
 
 # §13b/§14j/§14k: canonical run-dir audit log (scan.log + scan.log.json + errors.log),
@@ -2846,6 +2854,25 @@ def phase_wireless_intel(
     }, indent=2), encoding="utf-8")
     log(f"[0-I] Wrote {ap_json_path}")
 
+    if _ie and _MANAGED:
+        try:
+            _ap_rows = []
+            for _ap_em in filtered:
+                _ap_rows.append({
+                    "bssid":      _ap_em.get("bssid", ""),
+                    "ssid":       _ap_em.get("ssid", ""),
+                    "channel":    _ap_em.get("channel", ""),
+                    "encryption": _ap_em.get("encryption", ""),
+                    "wps":        _ap_em.get("wps", False),
+                    "power":      _ap_em.get("power", ""),
+                    "vendor":     _ap_em.get("vendor", ""),
+                    "laa":        _ap_em.get("laa", False),
+                })
+            if _ap_rows:
+                _ie.emit_intel("wireless_ap", _ap_rows, bulk=True)
+        except Exception:
+            pass
+
     best = filtered[0]
     status("p0_intel", "Phase 0-I: Wireless Intelligence", "complete",
            f"{len(filtered)} AP(s) | best: {best['bssid']}")
@@ -4528,6 +4555,18 @@ def phase_rogue_ap(monitor_iface: str, primary_iface: str, target_aps: list,
         (rogue_dir / "rogue_ap_results.json").write_text(
             json.dumps(findings_data, indent=2), encoding="utf-8"
         )
+        if _ie and _MANAGED:
+            try:
+                _ie.emit_intel("wireless_handshake", {
+                    "ssid":           findings_data.get("ssid", ""),
+                    "bssid":          findings_data.get("bssid", ""),
+                    "clients_connected": findings_data.get("clients_connected", 0),
+                    "psk_captured":   bool(findings_data.get("psk_captured")),
+                    "psk_validated":  findings_data.get("psk_validated", False),
+                    "portal_mode":    findings_data.get("portal_mode", ""),
+                })
+            except Exception:
+                pass
 
         if connected_clients:
             finding_from_cat(
@@ -4798,6 +4837,11 @@ def phase_client_attacks(monitor_iface: str, target_aps: list,
         (ca_dir / "probe_harvest.json").write_text(
             json.dumps(probe_data, indent=2), encoding="utf-8"
         )
+        if _ie and _MANAGED:
+            try:
+                _ie.emit_intel("wireless_probe", probe_data, bulk=True)
+            except Exception:
+                pass
         finding_from_cat(
             "probe_harvest",
             data={"count": len(probe_data), "clients": probe_data},
@@ -6747,6 +6791,47 @@ def phase_contextual_intel(enriched_aps: list, output_dir: Path) -> None:
     }
     (ctx_dir / "inventory.json").write_text(
         json.dumps(snapshot, indent=2), encoding="utf-8")
+    if _ie and _MANAGED:
+        try:
+            _inv_ap_rows = []
+            for _inv_ap in snapshot.get("aps", []):
+                _inv_ap_rows.append({
+                    "bssid":      _inv_ap.get("bssid", ""),
+                    "ssid":       _inv_ap.get("ssid", ""),
+                    "channel":    _inv_ap.get("channel", ""),
+                    "encryption": _inv_ap.get("encryption", ""),
+                    "auth_type":  _inv_ap.get("auth_type", ""),
+                    "vendor":     _inv_ap.get("vendor", ""),
+                    "product_line": _inv_ap.get("product_line", ""),
+                    "laa":        _inv_ap.get("laa", False),
+                    "is_meraki":  _inv_ap.get("is_meraki", False),
+                })
+            if _inv_ap_rows:
+                _ie.emit_intel("wireless_ap", _inv_ap_rows, bulk=True)
+        except Exception:
+            pass
+        try:
+            _inv_cl_rows = []
+            for _inv_cl in snapshot.get("clients", []):
+                _inv_cl_rows.append({
+                    "mac":              _inv_cl.get("mac", ""),
+                    "vendor":           _inv_cl.get("vendor", ""),
+                    "associated_bssid": _inv_cl.get("associated_bssid", ""),
+                    "associated_ssid":  _inv_cl.get("associated_ssid", ""),
+                    "probes":           _inv_cl.get("probes", []),
+                })
+            if _inv_cl_rows:
+                _ie.emit_intel("wireless_client", _inv_cl_rows, bulk=True)
+        except Exception:
+            pass
+        try:
+            _inv_probes = sorted(snapshot.get("probes", []))
+            if _inv_probes:
+                _ie.emit_intel("wireless_probe",
+                               [{"probed_ssid": p} for p in _inv_probes],
+                               bulk=True)
+        except Exception:
+            pass
     log(f"[0-II] END: Contextual Intelligence — {len(snapshot['aps'])} APs, "
         f"{len(snapshot['clients'])} clients, {len(snapshot['vendors'])} vendors, "
         f"{len(snapshot['auth_types'])} auth types observed")
@@ -6868,6 +6953,22 @@ def phase_vendor_recon(enriched_aps: list, output_dir: Path) -> None:
         "multi_ssid_aps": multi_ssid_aps,
     }, indent=2), encoding="utf-8")
 
+    if _ie and _MANAGED:
+        try:
+            _vi_rows = []
+            for _vi_ap in identified_aps:
+                _vi_rows.append({
+                    "bssid":        _vi_ap.get("bssid", ""),
+                    "ssid":         _vi_ap.get("ssid", ""),
+                    "vendor":       _vi_ap.get("vendor", ""),
+                    "model":        _vi_ap.get("model", ""),
+                    "product_line": _vi_ap.get("product_line", ""),
+                    "channel":      _vi_ap.get("channel", ""),
+                })
+            if _vi_rows:
+                _ie.emit_intel("wireless_ap", _vi_rows, bulk=True)
+        except Exception:
+            pass
     if identified_aps:
         (recon_dir / "ap_fingerprints.json").write_text(
             json.dumps(identified_aps, indent=2), encoding="utf-8")
@@ -7141,6 +7242,11 @@ def phase_server_cert_analysis(target_aps: list, output_dir: Path,
 
     (cert_dir / "certs_summary.json").write_text(
         json.dumps(cert_summaries, indent=2, default=str), encoding="utf-8")
+    if _ie and _MANAGED and cert_summaries:
+        try:
+            _ie.emit_intel("certificate", cert_summaries, bulk=True)
+        except Exception:
+            pass
     log(f"[0-IV] END: Certificate Analysis — {len(cert_summaries)} server cert(s) from {len(pcap_paths)} pcap(s)")
     status("p_cert", "Phase 0-IV: EAP-TLS Server Certificate Analysis",
            "complete", f"{len(cert_summaries)} certs analyzed")
@@ -7736,6 +7842,13 @@ def phase_eaptls_identity_analysis(output_dir: Path, timeout: int = 30) -> None:
 
     (id_dir / "eap_identities.json").write_text(
         json.dumps({"identities": identities}, indent=2), encoding="utf-8")
+    if _ie and _MANAGED and identities:
+        try:
+            _ie.emit_intel("wireless_client",
+                           [{"eap_identity": i} for i in identities],
+                           bulk=True)
+        except Exception:
+            pass
     if rejected:
         (id_dir / "eap_identities_rejected.json").write_text(
             json.dumps({"rejected": rejected,
