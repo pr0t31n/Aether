@@ -212,16 +212,19 @@ _fdb = None
 
 def _init_fdb():
     global _fdb
-    _db_path = os.environ.get("PR0T31N_FINDINGS_DB")
-    if _db_path:
-        try:
-            import sys as _s
-            if "/opt/pr0t31n/shared" not in _s.path:
-                _s.path.insert(0, "/opt/pr0t31n/shared")
-            import pr0t31n_findings_db
-            _fdb = pr0t31n_findings_db.FindingsDB(_db_path)
-        except Exception:
-            pass
+    _db_path = os.environ.get("PR0T31N_FINDINGS_DB") or (str(_RUN_DIR / "findings.db") if _RUN_DIR else None)
+    if not _db_path:
+        return
+    try:
+        import sys as _s
+        if "/opt/pr0t31n/shared" not in _s.path:
+            _s.path.insert(0, "/opt/pr0t31n/shared")
+        import pr0t31n_findings_db
+        _fdb = pr0t31n_findings_db.FindingsDB(_db_path)
+    except Exception:
+        pass
+    if _fdb and _ie:
+        _ie.init_db(_fdb)
 
 
 # ── Output protocol ───────────────────────────────────────────────────────────
@@ -2845,16 +2848,7 @@ def phase_wireless_intel(
     for ap in filtered:
         ap["laa"] = _is_laa(ap["bssid"])
 
-    # Persist to access_points.json (read by Crucible Access Points tab)
-    ap_json_path = output_dir / "access_points.json"
-    ap_json_path.write_text(json.dumps({
-        "scan_time":    datetime.now().isoformat(),
-        "target_ssids": target_ssids,
-        "access_points": filtered,
-    }, indent=2), encoding="utf-8")
-    log(f"[0-I] Wrote {ap_json_path}")
-
-    if _ie and _MANAGED:
+    if _ie:
         try:
             _ap_rows = []
             for _ap_em in filtered:
@@ -2872,6 +2866,15 @@ def phase_wireless_intel(
                 _ie.emit_intel("wireless_ap", _ap_rows, bulk=True)
         except Exception:
             pass
+
+    # Persist to access_points.json (read by Crucible Access Points tab)
+    ap_json_path = output_dir / "access_points.json"
+    ap_json_path.write_text(json.dumps({
+        "scan_time":    datetime.now().isoformat(),
+        "target_ssids": target_ssids,
+        "access_points": filtered,
+    }, indent=2), encoding="utf-8")
+    log(f"[0-I] Wrote {ap_json_path}")
 
     best = filtered[0]
     status("p0_intel", "Phase 0-I: Wireless Intelligence", "complete",
@@ -4552,10 +4555,7 @@ def phase_rogue_ap(monitor_iface: str, primary_iface: str, target_aps: list,
             "psk_validated": bool(pmkid_entries and captured_psk),
             "portal_mode": use_portal,
         }
-        (rogue_dir / "rogue_ap_results.json").write_text(
-            json.dumps(findings_data, indent=2), encoding="utf-8"
-        )
-        if _ie and _MANAGED:
+        if _ie:
             try:
                 _ie.emit_intel("wireless_handshake", {
                     "ssid":           findings_data.get("ssid", ""),
@@ -4567,6 +4567,9 @@ def phase_rogue_ap(monitor_iface: str, primary_iface: str, target_aps: list,
                 })
             except Exception:
                 pass
+        (rogue_dir / "rogue_ap_results.json").write_text(
+            json.dumps(findings_data, indent=2), encoding="utf-8"
+        )
 
         if connected_clients:
             finding_from_cat(
@@ -4834,14 +4837,14 @@ def phase_client_attacks(monitor_iface: str, target_aps: list,
                                     "seen_on_bssid": ap.get("bssid", "")})
                 log(f"Phase 7c: {mac} probing: {', '.join(probes)}")
     if probe_data:
-        (ca_dir / "probe_harvest.json").write_text(
-            json.dumps(probe_data, indent=2), encoding="utf-8"
-        )
-        if _ie and _MANAGED:
+        if _ie:
             try:
                 _ie.emit_intel("wireless_probe", probe_data, bulk=True)
             except Exception:
                 pass
+        (ca_dir / "probe_harvest.json").write_text(
+            json.dumps(probe_data, indent=2), encoding="utf-8"
+        )
         finding_from_cat(
             "probe_harvest",
             data={"count": len(probe_data), "clients": probe_data},
@@ -5981,6 +5984,7 @@ def run(config: dict, project: str) -> None:
         output_dir = Path(project) / config.get("output_dir", "aether_output")
     output_dir.mkdir(parents=True, exist_ok=True)
     _RUN_DIR = output_dir
+    _init_fdb()
 
     # Generated wordlists (SSID-seeded, domain-derived, website-scraped,
     # multi-source merges) land in <project>/wordlists/ instead of /tmp/
@@ -6789,9 +6793,7 @@ def phase_contextual_intel(enriched_aps: list, output_dir: Path) -> None:
         "ssids":       sorted(inventory["ssids"]),
         "probes":      sorted(inventory["probes"]),
     }
-    (ctx_dir / "inventory.json").write_text(
-        json.dumps(snapshot, indent=2), encoding="utf-8")
-    if _ie and _MANAGED:
+    if _ie:
         try:
             _inv_ap_rows = []
             for _inv_ap in snapshot.get("aps", []):
@@ -6832,6 +6834,8 @@ def phase_contextual_intel(enriched_aps: list, output_dir: Path) -> None:
                                bulk=True)
         except Exception:
             pass
+    (ctx_dir / "inventory.json").write_text(
+        json.dumps(snapshot, indent=2), encoding="utf-8")
     log(f"[0-II] END: Contextual Intelligence — {len(snapshot['aps'])} APs, "
         f"{len(snapshot['clients'])} clients, {len(snapshot['vendors'])} vendors, "
         f"{len(snapshot['auth_types'])} auth types observed")
@@ -6941,19 +6945,8 @@ def phase_vendor_recon(enriched_aps: list, output_dir: Path) -> None:
                                  title_override=f"Wireless Misconfiguration: Multiple SSIDs on Shared Physical AP "
                                                 f"(prefix {prefix}): {', '.join(ssids_on_prefix)}")
 
-    # Persist vendor inventory and fingerprints
-    (recon_dir / "vendor_inventory.json").write_text(json.dumps({
-        "meraki_aps": [{
-            "bssid": ap.get("bssid", ""), "ssid": ap.get("ssid", ""),
-            "channel": ap.get("channel", ""),
-            "vendor": _oui_lookup(ap.get("bssid", ""))[0],
-            "product_line": _oui_lookup(ap.get("bssid", ""))[1],
-        } for ap in meraki_aps],
-        "identified_aps": identified_aps,
-        "multi_ssid_aps": multi_ssid_aps,
-    }, indent=2), encoding="utf-8")
-
-    if _ie and _MANAGED:
+    # Emit to DB first, then persist vendor inventory and fingerprints
+    if _ie:
         try:
             _vi_rows = []
             for _vi_ap in identified_aps:
@@ -6969,6 +6962,16 @@ def phase_vendor_recon(enriched_aps: list, output_dir: Path) -> None:
                 _ie.emit_intel("wireless_ap", _vi_rows, bulk=True)
         except Exception:
             pass
+    (recon_dir / "vendor_inventory.json").write_text(json.dumps({
+        "meraki_aps": [{
+            "bssid": ap.get("bssid", ""), "ssid": ap.get("ssid", ""),
+            "channel": ap.get("channel", ""),
+            "vendor": _oui_lookup(ap.get("bssid", ""))[0],
+            "product_line": _oui_lookup(ap.get("bssid", ""))[1],
+        } for ap in meraki_aps],
+        "identified_aps": identified_aps,
+        "multi_ssid_aps": multi_ssid_aps,
+    }, indent=2), encoding="utf-8")
     if identified_aps:
         (recon_dir / "ap_fingerprints.json").write_text(
             json.dumps(identified_aps, indent=2), encoding="utf-8")
@@ -7240,13 +7243,13 @@ def phase_server_cert_analysis(target_aps: list, output_dir: Path,
             cert_summaries.append(cert_info)
             _evaluate_cert_findings(cert_info, target_aps, cert_dir)
 
-    (cert_dir / "certs_summary.json").write_text(
-        json.dumps(cert_summaries, indent=2, default=str), encoding="utf-8")
-    if _ie and _MANAGED and cert_summaries:
+    if _ie and cert_summaries:
         try:
             _ie.emit_intel("certificate", cert_summaries, bulk=True)
         except Exception:
             pass
+    (cert_dir / "certs_summary.json").write_text(
+        json.dumps(cert_summaries, indent=2, default=str), encoding="utf-8")
     log(f"[0-IV] END: Certificate Analysis — {len(cert_summaries)} server cert(s) from {len(pcap_paths)} pcap(s)")
     status("p_cert", "Phase 0-IV: EAP-TLS Server Certificate Analysis",
            "complete", f"{len(cert_summaries)} certs analyzed")
@@ -7840,15 +7843,15 @@ def phase_eaptls_identity_analysis(output_dir: Path, timeout: int = 30) -> None:
                              title_override=f"Wireless Misconfiguration: EAP Outer Identity Leaks User-Realm Format: "
                                             f"{ident!r}")
 
-    (id_dir / "eap_identities.json").write_text(
-        json.dumps({"identities": identities}, indent=2), encoding="utf-8")
-    if _ie and _MANAGED and identities:
+    if _ie and identities:
         try:
             _ie.emit_intel("wireless_client",
                            [{"eap_identity": i} for i in identities],
                            bulk=True)
         except Exception:
             pass
+    (id_dir / "eap_identities.json").write_text(
+        json.dumps({"identities": identities}, indent=2), encoding="utf-8")
     if rejected:
         (id_dir / "eap_identities_rejected.json").write_text(
             json.dumps({"rejected": rejected,
@@ -7890,7 +7893,6 @@ def main():
         sys.exit(0)
 
     _startup_tool_check()
-    _init_fdb()
 
     config_path = Path(args.config)
     if not config_path.exists():
