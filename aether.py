@@ -6329,38 +6329,37 @@ def run(config: dict, project: str) -> None:
         err(f"Aborting: interface '{interface}' not available.")
         return
 
-    # ── Plugin updates ───────────────────────────────────────────────────
-    _bc_bin = shutil.which("bettercap")
-    if _bc_bin:
-        log("[*] Updating bettercap caplets…")
-        try:
-            subprocess.run(
-                [_bc_bin, "-eval", "caplets.update; quit"],
-                capture_output=True, text=True, timeout=120)
-            log("[+] bettercap caplets updated.")
-        except subprocess.TimeoutExpired:
-            log("[~] bettercap caplets update timed out — continuing.")
-        except Exception as _e:
-            log(f"[~] bettercap caplets update skipped: {_e}")
+    if not _SURVEY_MODE:
+        # ── Plugin updates ───────────────────────────────────────────
+        _bc_bin = shutil.which("bettercap")
+        if _bc_bin:
+            log("[*] Updating bettercap caplets…")
+            try:
+                subprocess.run(
+                    [_bc_bin, "-eval", "caplets.update; quit"],
+                    capture_output=True, text=True, timeout=120)
+                log("[+] bettercap caplets updated.")
+            except subprocess.TimeoutExpired:
+                log("[~] bettercap caplets update timed out — continuing.")
+            except Exception as _e:
+                log(f"[~] bettercap caplets update skipped: {_e}")
 
-    # Build wordlists before phases start
-    # Stack order: base list(s) → website scrape → domain derivation
-    # When multiple base wordlists are given (list[str]) they are merged into one
-    # deduplicated file first. The merged base is then extended by the targeted
-    # scrape/domain mutations as before.
-    if isinstance(wordlist, list):
-        _effective_wl = _concat_wordlists(wordlist)
-        log(f"Base wordlist(s) merged: {len(wordlist)} sources → {_effective_wl}")
+        # Build wordlists before phases start
+        if isinstance(wordlist, list):
+            _effective_wl = _concat_wordlists(wordlist)
+            log(f"Base wordlist(s) merged: {len(wordlist)} sources → {_effective_wl}")
+        else:
+            _effective_wl = wordlist
+        if scrape_url:
+            _scraped = _build_website_wordlist(scrape_url, scrape_depth, _effective_wl)
+            if _scraped:
+                log(f"Website wordlist active: {_scraped}")
+                _effective_wl = _scraped
+        _effective_wl = _build_domain_wordlist(domains, _effective_wl)
+        if _effective_wl and _effective_wl != wordlist:
+            log(f"Effective wordlist for cracking: {_effective_wl}")
     else:
-        _effective_wl = wordlist
-    if scrape_url:
-        _scraped = _build_website_wordlist(scrape_url, scrape_depth, _effective_wl)
-        if _scraped:
-            log(f"Website wordlist active: {_scraped}")
-            _effective_wl = _scraped
-    _effective_wl = _build_domain_wordlist(domains, _effective_wl)
-    if _effective_wl and _effective_wl != wordlist:
-        log(f"Effective wordlist for cracking: {_effective_wl}")
+        _effective_wl = None
 
     active_monitor = enable_monitor_mode(interface, monitor_iface)
 
