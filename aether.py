@@ -1814,6 +1814,27 @@ _USB_FRAGILE_DRIVERS = {
 }
 
 
+def _auto_wifi_interface() -> str:
+    """Pick the first wireless interface via sysfs, falling back to wlan0."""
+    try:
+        import pathlib
+        for p in sorted(pathlib.Path("/sys/class/net").iterdir()):
+            tp = p / "type"
+            wp = p / "wireless"
+            phy = p / "phy80211"
+            if wp.exists() or phy.exists():
+                return p.name
+            if tp.exists() and tp.read_text().strip() == "1":
+                try:
+                    if any((p / "device" / "ieee80211").iterdir()):
+                        return p.name
+                except (OSError, StopIteration):
+                    pass
+    except OSError:
+        pass
+    return "wlan0"
+
+
 def _nm_set_unmanaged(interface: str, unmanaged: bool) -> None:
     """Toggle NetworkManager's per-device management for `interface`.
     Replaces 'airmon-ng check kill' — surgical instead of nuclear.  Other
@@ -6035,8 +6056,8 @@ def run(config: dict, project: str) -> None:
     _set_project_wordlist_dir(Path(project) / "wordlists")
     _set_aether_run_dir(project)   # §14/§13c: per-invocation tool .logs + relative evidence
 
-    interface     = config.get("interface", "wlan0")
-    monitor_iface = config.get("monitor_interface", "wlan0mon")
+    interface     = (config.get("interface") or "").strip() or _auto_wifi_interface()
+    monitor_iface = (config.get("monitor_interface") or "").strip() or f"{interface}mon"
     target_ssids  = config.get("target_ssids", [])
     target_bssids = config.get("target_bssids", [])
     wordlist      = config.get("wordlist")
