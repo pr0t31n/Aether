@@ -3057,10 +3057,11 @@ def phase_deauth_handshake(
                "aireplay-ng not installed")
         return
 
-    aps_scoped = [ap for ap in enriched_aps if _in_scope(ap)]
+    aps_scoped = [ap for ap in enriched_aps if _in_scope(ap)
+                  and (ap.get("encryption") or "").upper() not in ("", "OPN", "OPEN")]
     aps_with_clients = [ap for ap in aps_scoped if ap.get("clients")]
     if not aps_with_clients:
-        log("[1c] No connected clients discovered — cannot perform targeted deauth")
+        log("[1c] No encrypted APs with connected clients — cannot perform targeted deauth")
         log("[1c] Tip: wait for clients or use Phase 1a (PMKID) for clientless capture")
         status("p1c_deauth", "Phase 1c: Deauth + Handshake", "skipped",
                "no clients discovered")
@@ -3325,7 +3326,8 @@ def phase_pmkid(
                "hcxdumptool / hcxpcapngtool not installed")
         return
 
-    scoped_aps = [ap for ap in target_aps if _in_scope(ap)]
+    scoped_aps = [ap for ap in target_aps if _in_scope(ap)
+                  and (ap.get("encryption") or "").upper() not in ("", "OPN", "OPEN")]
     if not scoped_aps:
         status("p1a_pmkid", "Phase 1a: PMKID Capture", "skipped", "no targets")
         return
@@ -3652,6 +3654,12 @@ def phase_wifite(
                     "(PSK / PMKID / WPS attacks do not apply; Phase 2 / "
                     "EAPHammer handles enterprise targets)")
                 continue
+            if ap_match:
+                _enc = (ap_match.get("encryption") or "").upper()
+                if not _enc or _enc in ("OPN", "OPEN"):
+                    log(f"[1b] '{ssid}' is open/unencrypted — skipping Phase 1b "
+                        "(no PSK to capture or crack)")
+                    continue
             merged_wl = _generate_ssid_wordlist(ssid, wordlist)
             extra = ["--essid", ssid]
             # Pair the correct BSSID with this SSID.  Prior versions blindly
@@ -5240,7 +5248,8 @@ def phase_pmkid_roam(monitor_iface: str, target_aps: list,
                "hcxdumptool / hcxpcapngtool not installed")
         return
 
-    scoped_aps = [ap for ap in target_aps if _in_scope(ap)]
+    scoped_aps = [ap for ap in target_aps if _in_scope(ap)
+                  and (ap.get("encryption") or "").upper() not in ("", "OPN", "OPEN")]
     if not scoped_aps:
         status("p1c_pmkid_roam", "Phase 1c: PMKID Roam Capture", "skipped", "no targets")
         return
