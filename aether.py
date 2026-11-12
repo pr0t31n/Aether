@@ -2852,16 +2852,26 @@ def phase_wireless_intel(
         try:
             _ap_rows = []
             for _ap_em in filtered:
-                _ap_rows.append({
-                    "bssid":      _ap_em.get("bssid", ""),
-                    "ssid":       _ap_em.get("ssid", ""),
-                    "channel":    _ap_em.get("channel", ""),
-                    "encryption": _ap_em.get("encryption", ""),
-                    "wps":        _ap_em.get("wps", False),
-                    "power":      _ap_em.get("power", ""),
-                    "vendor":     _ap_em.get("vendor", ""),
-                    "laa":        _ap_em.get("laa", False),
-                })
+                _wps_info = _ap_em.get("wps_info") or {}
+                _row = {
+                    "bssid":        _ap_em.get("bssid", ""),
+                    "ssid":         _ap_em.get("ssid", ""),
+                    "channel":      _ap_em.get("channel", ""),
+                    "encryption":   _ap_em.get("encryption", ""),
+                    "cipher":       _ap_em.get("cipher", ""),
+                    "auth":         _ap_em.get("auth", ""),
+                    "wps":          _ap_em.get("wps", False),
+                    "power":        _ap_em.get("power", ""),
+                    "signal_dbm":   _ap_em.get("signal") or _ap_em.get("power"),
+                    "vendor":       _ap_em.get("vendor", ""),
+                    "laa":          _ap_em.get("laa", False),
+                    "wps_version":  _wps_info.get("wps_version", ""),
+                    "wps_locked":   _wps_info.get("wps_locked"),
+                    "manufacturer": _wps_info.get("manufacturer", ""),
+                    "model_name":   _wps_info.get("model_name", ""),
+                    "device_name":  _wps_info.get("device_name", ""),
+                }
+                _ap_rows.append(_row)
             if _ap_rows:
                 _ie.emit_intel("wireless_ap", _ap_rows, bulk=True)
         except Exception:
@@ -6798,15 +6808,18 @@ def phase_contextual_intel(enriched_aps: list, output_dir: Path) -> None:
             _inv_ap_rows = []
             for _inv_ap in snapshot.get("aps", []):
                 _inv_ap_rows.append({
-                    "bssid":      _inv_ap.get("bssid", ""),
-                    "ssid":       _inv_ap.get("ssid", ""),
-                    "channel":    _inv_ap.get("channel", ""),
-                    "encryption": _inv_ap.get("encryption", ""),
-                    "auth_type":  _inv_ap.get("auth_type", ""),
-                    "vendor":     _inv_ap.get("vendor", ""),
+                    "bssid":        _inv_ap.get("bssid", ""),
+                    "ssid":         _inv_ap.get("ssid", ""),
+                    "channel":      _inv_ap.get("channel", ""),
+                    "encryption":   _inv_ap.get("encryption", ""),
+                    "cipher":       _inv_ap.get("cipher", ""),
+                    "auth":         _inv_ap.get("auth_type", "") or _inv_ap.get("auth", ""),
+                    "auth_type":    _inv_ap.get("auth_type", ""),
+                    "signal_dbm":   _inv_ap.get("signal") or _inv_ap.get("power"),
+                    "vendor":       _inv_ap.get("vendor", ""),
                     "product_line": _inv_ap.get("product_line", ""),
-                    "laa":        _inv_ap.get("laa", False),
-                    "is_meraki":  _inv_ap.get("is_meraki", False),
+                    "laa":          _inv_ap.get("laa", False),
+                    "is_meraki":    _inv_ap.get("is_meraki", False),
                 })
             if _inv_ap_rows:
                 _ie.emit_intel("wireless_ap", _inv_ap_rows, bulk=True)
@@ -6827,11 +6840,14 @@ def phase_contextual_intel(enriched_aps: list, output_dir: Path) -> None:
         except Exception:
             pass
         try:
-            _inv_probes = sorted(snapshot.get("probes", []))
-            if _inv_probes:
-                _ie.emit_intel("wireless_probe",
-                               [{"probed_ssid": p} for p in _inv_probes],
-                               bulk=True)
+            _inv_probe_rows = []
+            for _inv_cl2 in snapshot.get("clients", []):
+                _cl2_mac = _inv_cl2.get("mac", "")
+                for _ps in (_inv_cl2.get("probes") or []):
+                    if _cl2_mac and _ps:
+                        _inv_probe_rows.append({"client_mac": _cl2_mac, "probed_ssid": _ps})
+            if _inv_probe_rows:
+                _ie.emit_intel("wireless_probe", _inv_probe_rows, bulk=True)
         except Exception:
             pass
     (ctx_dir / "inventory.json").write_text(
@@ -6957,6 +6973,7 @@ def phase_vendor_recon(enriched_aps: list, output_dir: Path) -> None:
                     "model":        _vi_ap.get("model", ""),
                     "product_line": _vi_ap.get("product_line", ""),
                     "channel":      _vi_ap.get("channel", ""),
+                    "signal_dbm":   _vi_ap.get("signal") or _vi_ap.get("power"),
                 })
             if _vi_rows:
                 _ie.emit_intel("wireless_ap", _vi_rows, bulk=True)
@@ -7801,18 +7818,25 @@ def phase_eaptls_identity_analysis(output_dir: Path, timeout: int = 30) -> None:
         return
 
     raw_identities: list = []
+    _eap_mac_map: dict = {}
     for pcap in pcap_paths:
         try:
             out, rc = _run([
                 "tshark", "-r", str(pcap),
                 "-Y", "eap.code == 2 and eap.identity",
                 "-T", "fields", "-e", "eap.identity",
+                "-e", "wlan.sa",
+                "-E", "separator=\t",
             ], timeout=timeout)
             if rc == 0 and out.strip():
                 for line in out.strip().splitlines():
-                    ident = line.strip()
+                    _parts = line.split("\t")
+                    ident = _parts[0].strip() if _parts else ""
+                    _sa = _parts[1].strip().upper() if len(_parts) > 1 else ""
                     if ident and ident not in raw_identities:
                         raw_identities.append(ident)
+                        if _sa:
+                            _eap_mac_map[ident] = _sa
         except Exception:
             pass
 
@@ -7845,9 +7869,14 @@ def phase_eaptls_identity_analysis(output_dir: Path, timeout: int = 30) -> None:
 
     if _ie and identities:
         try:
-            _ie.emit_intel("wireless_client",
-                           [{"eap_identity": i} for i in identities],
-                           bulk=True)
+            _eap_rows = []
+            for i in identities:
+                _eap_row = {"eap_identity": i}
+                _emac = _eap_mac_map.get(i, "")
+                if _emac:
+                    _eap_row["mac"] = _emac
+                _eap_rows.append(_eap_row)
+            _ie.emit_intel("wireless_client", _eap_rows, bulk=True)
         except Exception:
             pass
     (id_dir / "eap_identities.json").write_text(
