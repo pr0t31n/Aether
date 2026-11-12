@@ -1591,11 +1591,12 @@ class _TextLinkParser(_HTMLParser):
         "code", "pre", "iframe", "object", "embed",
     })
 
-    def __init__(self, base_url: str) -> None:
+    def __init__(self, base_url: str, allowed_netlocs: set | None = None) -> None:
         super().__init__(convert_charrefs=True)
         self._skip: int = 0
         self._base = base_url
         self._base_parsed = urllib.parse.urlparse(base_url)
+        self._allowed_netlocs: set = allowed_netlocs or {self._base_parsed.netloc}
         self.texts: list = []
         self.links: set = set()
 
@@ -1610,7 +1611,7 @@ class _TextLinkParser(_HTMLParser):
         if href and not href.startswith(("#", "javascript:", "mailto:", "tel:")):
             abs_url = urllib.parse.urljoin(self._base, href)
             p = urllib.parse.urlparse(abs_url)
-            if (p.netloc == self._base_parsed.netloc
+            if (p.netloc in self._allowed_netlocs
                     and p.scheme in ("http", "https")):
                 self.links.add(urllib.parse.urlunparse(
                     (p.scheme, p.netloc, p.path, "", "", "")))
@@ -1631,6 +1632,8 @@ def _scrape_site(url: str, max_depth: int, max_pages: int = 80) -> tuple:
     visited: set = set()
     queue: list = [(url.rstrip("/"), 0)]
     all_texts: list = []
+    _initial_netloc = urllib.parse.urlparse(url).netloc
+    _allowed_netlocs: set = {_initial_netloc}
 
     while queue and len(visited) < max_pages:
         cur, depth = queue.pop(0)
@@ -1644,6 +1647,7 @@ def _scrape_site(url: str, max_depth: int, max_pages: int = 80) -> tuple:
                 headers={"User-Agent": "pr0t31n-wordlist/1.0 (+assessment)"},
             )
             with urllib.request.urlopen(req, timeout=12) as resp:
+                final_url = resp.url
                 ct = resp.headers.get("Content-Type", "")
                 if "text/html" not in ct:
                     continue
@@ -1652,7 +1656,14 @@ def _scrape_site(url: str, max_depth: int, max_pages: int = 80) -> tuple:
             err(f"  [scrape] {cur}: {exc}")
             continue
 
-        parser = _TextLinkParser(cur)
+        _redir_netloc = urllib.parse.urlparse(final_url).netloc
+        if _redir_netloc != _initial_netloc:
+            _allowed_netlocs.add(_redir_netloc)
+            if final_url not in visited:
+                visited.add(final_url)
+                log(f"  [scrape] followed redirect → {final_url}")
+
+        parser = _TextLinkParser(final_url, _allowed_netlocs)
         try:
             parser.feed(body)
         except Exception:
