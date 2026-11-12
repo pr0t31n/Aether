@@ -2790,6 +2790,39 @@ def phase_wireless_intel(
                 "packets": sta["packets"],
             })
 
+    # ── Early intel emit: push AP + client data to Crucible NOW ─────
+    # The targeted follow-ups below can take minutes for many APs.
+    # Emit what we have so the Intelligence tabs populate immediately.
+    if _ie and filtered:
+        try:
+            _early_rows = []
+            for _eap in filtered:
+                _early_rows.append({
+                    "bssid":      _eap.get("bssid", ""),
+                    "ssid":       _eap.get("ssid", ""),
+                    "channel":    _eap.get("channel", ""),
+                    "encryption": _eap.get("encryption", ""),
+                    "cipher":     _eap.get("cipher", ""),
+                    "auth":       _eap.get("auth", ""),
+                    "wps":        _eap.get("wps", False),
+                    "signal_dbm": _eap.get("signal"),
+                })
+            _ie.emit_intel("wireless_ap", _early_rows, bulk=True)
+            _early_clients = []
+            for _eap in filtered:
+                for _ecl in _eap.get("clients", []):
+                    _early_clients.append({
+                        "mac":              _ecl["mac"],
+                        "associated_bssid": _eap["bssid"],
+                        "associated_ssid":  _eap.get("ssid", ""),
+                        "signal_dbm":       _ecl.get("signal"),
+                        "packets":          _ecl.get("packets", 0),
+                    })
+            if _early_clients:
+                _ie.emit_intel("wireless_client", _early_clients, bulk=True)
+        except Exception:
+            pass
+
     # Targeted follow-up scans for APs that still have no clients.
     # The broad band scan may miss idle clients; a channel-locked scan focused
     # on a single BSSID gives airodump-ng the best chance to capture sparse
@@ -2835,6 +2868,18 @@ def phase_wireless_intel(
                     seen_macs.add(sta["mac"])
             if ap["clients"]:
                 log(f"[0-I] Follow-up: {len(ap['clients'])} client(s) on {ap['bssid']}")
+                if _ie:
+                    try:
+                        _fu_clients = [{
+                            "mac":              c["mac"],
+                            "associated_bssid": ap["bssid"],
+                            "associated_ssid":  ap.get("ssid", ""),
+                            "signal_dbm":       c.get("signal"),
+                            "packets":          c.get("packets", 0),
+                        } for c in ap["clients"]]
+                        _ie.emit_intel("wireless_client", _fu_clients, bulk=True)
+                    except Exception:
+                        pass
 
     # Score and rank APs
     for ap in filtered:
