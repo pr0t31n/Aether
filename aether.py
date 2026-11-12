@@ -1927,7 +1927,12 @@ def enable_monitor_mode(interface: str, monitor_iface: str) -> str:
         # without nmcli.
         _nm_set_unmanaged(interface, unmanaged=True)
         _wpa_supplicant_release(interface)
-        out, _ = _run(["sudo", "airmon-ng", "start", interface])
+        time.sleep(1)
+        _run(["sudo", "ip", "link", "set", interface, "down"], timeout=5)
+        time.sleep(0.5)
+        out, rc = _run(["sudo", "airmon-ng", "start", interface])
+        if rc != 0:
+            err(f"airmon-ng start exited {rc}: {out[:400]}")
         time.sleep(2)
         post = _net_ifaces()
 
@@ -1937,11 +1942,16 @@ def enable_monitor_mode(interface: str, monitor_iface: str) -> str:
                 log(f"Monitor mode enabled: {name}")
                 return name
 
-        # Secondary: existing interface converted to monitor mode in-place
+        # Secondary: existing interface (other than original) now in monitor mode
         for name in sorted(post):
             if name != interface and _is_monitor(name):
                 log(f"Monitor mode enabled: {name}")
                 return name
+
+        # In-place conversion: original interface itself is now monitor mode
+        if _is_monitor(interface):
+            log(f"Monitor mode enabled (in-place): {interface}")
+            return interface
 
         # Tertiary: regex on airmon-ng output — require leading alpha to reject
         # bare numbers (e.g. "10") that some airmon-ng versions emit
@@ -1955,6 +1965,18 @@ def enable_monitor_mode(interface: str, monitor_iface: str) -> str:
                 log(f"Monitor mode enabled: {detected}")
                 return detected
 
+        # Configured name exists and is monitor — use it
+        if monitor_iface in post and _is_monitor(monitor_iface):
+            log(f"Monitor mode confirmed on configured name {monitor_iface}")
+            return monitor_iface
+
+        # Last resort: configured name, but warn it's unverified
+        if monitor_iface in post:
+            log(f"Monitor mode started — using configured name {monitor_iface} (type unverified)")
+            return monitor_iface
+
+        err(f"Monitor interface {monitor_iface} does not exist after airmon-ng start. "
+            f"Available: {sorted(post)}")
         log(f"Monitor mode started — using configured name {monitor_iface}")
         return monitor_iface
 
