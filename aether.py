@@ -229,6 +229,8 @@ def _init_fdb():
 
 # ── Output protocol ───────────────────────────────────────────────────────────
 _MANAGED = os.environ.get("CRUCIBLE_MANAGED", "") == "1"
+_SURVEY_MODE = False
+_SURVEY_LOCATION = ""
 
 try:
     import sys as _sys_ie
@@ -238,6 +240,18 @@ try:
 except ImportError:
     _ie = None
 _log_fh = None  # opened in main() once the project dir is known
+
+
+def _emit_ap_intel(rows, bulk=True):
+    """Emit AP intel — routes to survey_ap (with location) when in survey mode."""
+    if not _ie:
+        return
+    if _SURVEY_MODE:
+        for r in rows:
+            r["location"] = _SURVEY_LOCATION
+        _ie.emit_intel("survey_ap", rows, bulk=bulk)
+    else:
+        _ie.emit_intel("wireless_ap", rows, bulk=bulk)
 
 # §13b/§14j/§14k: canonical run-dir audit log (scan.log + scan.log.json + errors.log),
 # alongside the legacy aether_console.log. Set in main() once the project dir exists.
@@ -2823,7 +2837,7 @@ def phase_wireless_intel(
                     "wps":        _eap.get("wps", False),
                     "signal_dbm": _eap.get("signal"),
                 })
-            _ie.emit_intel("wireless_ap", _early_rows, bulk=True)
+            _emit_ap_intel(_early_rows)
             _early_clients = []
             for _eap in filtered:
                 for _ecl in _eap.get("clients", []):
@@ -2988,7 +3002,7 @@ def phase_wireless_intel(
                 }
                 _ap_rows.append(_row)
             if _ap_rows:
-                _ie.emit_intel("wireless_ap", _ap_rows, bulk=True)
+                _emit_ap_intel(_ap_rows)
         except Exception:
             pass
 
@@ -6236,6 +6250,13 @@ def run(config: dict, project: str) -> None:
         if phases_cfg.get("firmware_correlation", True):
             phase_firmware_correlation(enriched_aps, output_dir)
 
+        if _SURVEY_MODE:
+            log(f"[survey] Scan complete — {len(enriched_aps)} AP(s) discovered at "
+                f"{_SURVEY_LOCATION!r}")
+            status("survey", "Survey", "complete",
+                   f"{len(enriched_aps)} AP(s) at {_SURVEY_LOCATION}")
+            raise SystemExit(0)
+
         # Narrow subsequent phases to the best-scored AP when user has not
         # specified an explicit BSSID — reduces false-positive capture and
         # avoids attacking out-of-scope BSSIDs.
@@ -6613,6 +6634,10 @@ Examples:
                         help="Hashcat rule file for staged PMKID cracking (repeatable)")
     parser.add_argument("--list-phases", action="store_true",
                         help="List available phases and exit")
+    parser.add_argument("--survey", action="store_true",
+                        help="Survey mode: scan-only, emit intel, then exit")
+    parser.add_argument("--location",
+                        help="Survey location label (used with --survey)")
     return parser.parse_args()
 
 
@@ -6926,7 +6951,7 @@ def phase_contextual_intel(enriched_aps: list, output_dir: Path) -> None:
                     "is_meraki":    _inv_ap.get("is_meraki", False),
                 })
             if _inv_ap_rows:
-                _ie.emit_intel("wireless_ap", _inv_ap_rows, bulk=True)
+                _emit_ap_intel(_inv_ap_rows)
         except Exception:
             pass
         try:
@@ -7080,7 +7105,7 @@ def phase_vendor_recon(enriched_aps: list, output_dir: Path) -> None:
                     "signal_dbm":   _vi_ap.get("signal") or _vi_ap.get("power"),
                 })
             if _vi_rows:
-                _ie.emit_intel("wireless_ap", _vi_rows, bulk=True)
+                _emit_ap_intel(_vi_rows)
         except Exception:
             pass
     (recon_dir / "vendor_inventory.json").write_text(json.dumps({
@@ -8166,6 +8191,21 @@ def main():
             "eap_fast_anon", "sae_downgrade", "post_connection", "legacy_attacks",
         ]
         config["phases"] = {k: (k == _phase_map[args.phase]) for k in _all_keys}
+
+    if args.survey:
+        global _SURVEY_MODE, _SURVEY_LOCATION
+        _SURVEY_MODE = True
+        _SURVEY_LOCATION = args.location or ""
+        _all_phase_keys = [
+            "wep", "pmkid", "pmkid_roam", "wpa_handshake", "wpa_enterprise",
+            "dragonblood_sae", "dragonblood_drain", "krack",
+            "rogue_ap", "karma", "mana_loud", "client_attacks", "eap_downgrade",
+            "eap_fast_anon", "sae_downgrade", "post_connection", "legacy_attacks",
+            "contextual_intel", "vendor_recon", "meraki_recon",
+            "firmware_correlation",
+        ]
+        config["phases"] = {k: False for k in _all_phase_keys}
+        log(f"[survey] Survey mode — location: {_SURVEY_LOCATION!r}")
 
     _load_catalogue()
     run(config, args.project)
