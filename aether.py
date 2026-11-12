@@ -1049,6 +1049,22 @@ def _is_active_scope(ap: dict) -> bool:
     return mode == "active"
 
 
+def _is_psk_crackable(ap: dict) -> bool:
+    """Return True if this AP uses a PSK that can be captured and cracked.
+    Returns False for open networks, WPA-Enterprise (EAP/MGT/802.1X),
+    and WPA3-SAE (Dragonfly handshake is resistant to offline attacks)."""
+    enc = (ap.get("encryption") or "").upper()
+    if not enc or enc in ("OPN", "OPEN"):
+        return False
+    blob = " ".join([str(ap.get(k, "")) for k in
+                     ("encryption", "auth", "cipher")])
+    if re.search(r'\bWPA\d?\s*EAP\b|Enterprise|\bMGT\b|802\.1X', blob, re.I):
+        return False
+    if re.search(r'\bSAE\b', blob, re.I) and not re.search(r'\bPSK\b', blob, re.I):
+        return False
+    return True
+
+
 # ── Cross-AP auth-mode consistency detector ──────────────────────────────────
 # Ordered weakest → strongest.  Index = security tier.  Equal indices mean
 # "no real downgrade" (e.g. WPA2-EAP and WPA3-EAP-Transition both ~tier 5).
@@ -3057,8 +3073,8 @@ def phase_deauth_handshake(
                "aireplay-ng not installed")
         return
 
-    aps_scoped = [ap for ap in enriched_aps if _in_scope(ap)
-                  and (ap.get("encryption") or "").upper() not in ("", "OPN", "OPEN")]
+    aps_scoped = [ap for ap in enriched_aps
+                  if _in_scope(ap) and _is_psk_crackable(ap)]
     aps_with_clients = [ap for ap in aps_scoped if ap.get("clients")]
     if not aps_with_clients:
         log("[1c] No encrypted APs with connected clients — cannot perform targeted deauth")
@@ -3326,8 +3342,8 @@ def phase_pmkid(
                "hcxdumptool / hcxpcapngtool not installed")
         return
 
-    scoped_aps = [ap for ap in target_aps if _in_scope(ap)
-                  and (ap.get("encryption") or "").upper() not in ("", "OPN", "OPEN")]
+    scoped_aps = [ap for ap in target_aps
+                  if _in_scope(ap) and _is_psk_crackable(ap)]
     if not scoped_aps:
         status("p1a_pmkid", "Phase 1a: PMKID Capture", "skipped", "no targets")
         return
@@ -3629,37 +3645,17 @@ def phase_wifite(
         except Exception as exc:
             err(f"wifite2 error ({label}): {exc}")
 
-    # WPA-Enterprise targets do not have a PSK to recover — Phase 1b's tooling
-    # (wifite2 PSK / PMKID / WPS) cannot apply to them.  They are routed to
-    # Phase 2 (EAPHammer + asleap).  Detect via the AP's encryption/auth/cipher
-    # blob: airodump-ng tags enterprise as 'WPA2 EAP', 'MGT', or '802.1X'.
-    def _is_enterprise(ap: dict) -> bool:
-        blob = " ".join([str(ap.get(k, "")) for k in
-                         ("encryption", "auth", "cipher")])
-        return bool(re.search(r'\bWPA\d?\s*EAP\b|Enterprise|\bMGT\b|802\.1X',
-                              blob, re.I))
-
     if target_ssids:
-        # Pre-build a {SSID: BSSID} map from target_aps so each iteration can
-        # pair the right BSSID with the right SSID.  Falls back to operator-
-        # supplied target_bssids (single-SSID case) or omits --bssid entirely
-        # when no match is available.
         ssid_to_bssid = {a.get("ssid"): a.get("bssid")
                          for a in target_aps if a.get("ssid") and a.get("bssid")}
         for ssid in target_ssids:
             ap_match = next((a for a in target_aps
                              if a.get("ssid") == ssid), None)
-            if ap_match and _is_enterprise(ap_match):
-                log(f"[1b] '{ssid}' is WPA-Enterprise — skipping Phase 1b "
-                    "(PSK / PMKID / WPS attacks do not apply; Phase 2 / "
-                    "EAPHammer handles enterprise targets)")
-                continue
-            if ap_match:
+            if ap_match and not _is_psk_crackable(ap_match):
                 _enc = (ap_match.get("encryption") or "").upper()
-                if not _enc or _enc in ("OPN", "OPEN"):
-                    log(f"[1b] '{ssid}' is open/unencrypted — skipping Phase 1b "
-                        "(no PSK to capture or crack)")
-                    continue
+                log(f"[1b] '{ssid}' ({_enc}) — skipping Phase 1b "
+                    "(not a crackable PSK target)")
+                continue
             merged_wl = _generate_ssid_wordlist(ssid, wordlist)
             extra = ["--essid", ssid]
             # Pair the correct BSSID with this SSID.  Prior versions blindly
@@ -5248,8 +5244,8 @@ def phase_pmkid_roam(monitor_iface: str, target_aps: list,
                "hcxdumptool / hcxpcapngtool not installed")
         return
 
-    scoped_aps = [ap for ap in target_aps if _in_scope(ap)
-                  and (ap.get("encryption") or "").upper() not in ("", "OPN", "OPEN")]
+    scoped_aps = [ap for ap in target_aps
+                  if _in_scope(ap) and _is_psk_crackable(ap)]
     if not scoped_aps:
         status("p1c_pmkid_roam", "Phase 1c: PMKID Roam Capture", "skipped", "no targets")
         return
