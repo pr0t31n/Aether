@@ -6177,12 +6177,12 @@ def _run_survey_loop(monitor_iface: str, output_dir: Path,
                     rows.append({
                         "bssid":        ap.get("bssid", ""),
                         "ssid":         ap.get("ssid", ""),
-                        "channel":      ap.get("channel", ""),
+                        "channel":      ap.get("channel", 0),
                         "encryption":   ap.get("encryption", ""),
                         "cipher":       ap.get("cipher", ""),
                         "auth":         ap.get("auth", ""),
                         "wps":          ap.get("wps", False),
-                        "signal_dbm":   ap.get("signal"),
+                        "signal":       ap.get("signal"),
                         "beacons":      ap.get("beacons", 0),
                         "client_count": len(ap.get("clients", [])),
                     })
@@ -6210,15 +6210,26 @@ def _run_survey_loop(monitor_iface: str, output_dir: Path,
                         _ie.emit_intel("wireless_client", client_rows,
                                        bulk=True)
 
-            new_count = len(filtered) - len(seen_bssids)
+            new_aps = []
             for ap in filtered:
-                seen_bssids[ap["bssid"].upper()] = ap
+                bk = ap["bssid"].upper()
+                if bk not in seen_bssids:
+                    new_aps.append(ap)
+                seen_bssids[bk] = ap
 
             total = len(seen_bssids)
-            if _round % 6 == 0 or new_count > 0:
-                log(f"[survey] {total} AP(s) seen"
-                    + (f" (+{new_count} new)" if new_count > 0 else "")
-                    + f" — {_SURVEY_LOCATION!r}")
+            if new_aps:
+                for nap in new_aps:
+                    _ssid = nap.get("ssid") or "<hidden>"
+                    _enc = nap.get("encryption", "")
+                    _ch = nap.get("channel", "?")
+                    _sig = nap.get("signal", "?")
+                    log(f"[survey] NEW  {nap['bssid']}  {_ssid!r}"
+                        f"  ch={_ch}  {_enc}  {_sig}dBm")
+                log(f"[survey] {total} AP(s) total"
+                    f" (+{len(new_aps)} new) — {_SURVEY_LOCATION!r}")
+            elif _round % 6 == 0:
+                log(f"[survey] {total} AP(s) seen — {_SURVEY_LOCATION!r}")
             status("survey", "Survey", "running",
                    f"{total} AP(s) — {_SURVEY_LOCATION}")
 
