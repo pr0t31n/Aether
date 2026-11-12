@@ -6251,11 +6251,24 @@ def run(config: dict, project: str) -> None:
             phase_firmware_correlation(enriched_aps, output_dir)
 
         if _SURVEY_MODE:
-            log(f"[survey] Scan complete — {len(enriched_aps)} AP(s) discovered at "
+            _survey_total = len(enriched_aps)
+            log(f"[survey] Initial scan — {_survey_total} AP(s) at "
                 f"{_SURVEY_LOCATION!r}")
-            status("survey", "Survey", "complete",
-                   f"{len(enriched_aps)} AP(s) at {_SURVEY_LOCATION}")
-            raise SystemExit(0)
+            status("survey", "Survey", "running",
+                   f"{_survey_total} AP(s) at {_SURVEY_LOCATION}")
+            _survey_round = 1
+            while True:
+                _check_pause()
+                time.sleep(intel_scan_seconds)
+                _survey_round += 1
+                log(f"[survey] Re-scan #{_survey_round}…")
+                _, _re_aps = phase_wireless_intel(
+                    active_monitor, target_ssids, target_bssids,
+                    output_dir, scan_seconds=intel_scan_seconds,
+                )
+                _survey_total = len(_re_aps)
+                status("survey", "Survey", "running",
+                       f"scan #{_survey_round}: {_survey_total} AP(s)")
 
         # Narrow subsequent phases to the best-scored AP when user has not
         # specified an explicit BSSID — reduces false-positive capture and
