@@ -6250,6 +6250,8 @@ def run(config: dict, project: str) -> None:
         if phases_cfg.get("firmware_correlation", True):
             phase_firmware_correlation(enriched_aps, output_dir)
 
+        print(f"[DBG-run] _SURVEY_MODE={_SURVEY_MODE}  about to check survey branch",
+              flush=True)
         if _SURVEY_MODE:
             _survey_total = len(enriched_aps)
             log(f"[survey] Initial scan — {_survey_total} AP(s) at "
@@ -8220,6 +8222,9 @@ def main():
         config["phases"] = {k: False for k in _all_phase_keys}
         log(f"[survey] Survey mode — location: {_SURVEY_LOCATION!r}")
 
+    print(f"[DBG-main] args.survey={args.survey}  _SURVEY_MODE={_SURVEY_MODE}  "
+          f"phases_all_false={all(not v for v in config.get('phases',{}).values())}",
+          flush=True)
     _load_catalogue()
     run(config, args.project)
 
