@@ -6101,6 +6101,147 @@ def phase_legacy_attacks(monitor_iface: str, target_aps: list,
     log("[11] END: Legacy / Niche Attacks complete")
     status("p11_legacy", "Phase 11: Legacy / Niche Attacks", "complete")
 
+# ── Survey mode ───────────────────────────────────────────────────────────────
+
+def _run_survey_loop(monitor_iface: str, output_dir: Path,
+                     scan_channel: int | None,
+                     target_ssids: list[str],
+                     target_bssids: list[str]) -> None:
+    """Continuous passive airodump-ng survey.  Bypasses all attack phases.
+
+    Runs airodump-ng with --write-interval 5 and re-parses the CSV every
+    5 seconds.  New/updated APs are emitted via ``_emit_ap_intel`` so
+    Crucible's Survey tab populates in real time.  Loops until the process
+    is killed (Crucible Stop Survey, Ctrl-C, or SIGTERM).
+    """
+    survey_dir = output_dir / "survey"
+    survey_dir.mkdir(parents=True, exist_ok=True)
+    out_prefix = str(survey_dir / "survey_scan")
+    csv_file = out_prefix + "-01.csv"
+
+    cmd = [
+        "sudo", "airodump-ng",
+        "--write", out_prefix,
+        "--output-format", "csv",
+        "--write-interval", "5",
+        "--band", "abg",
+    ]
+    if scan_channel is not None:
+        cmd += ["--channel", str(scan_channel)]
+    cmd.append(monitor_iface)
+
+    log(f"[survey] Starting continuous scan — location: {_SURVEY_LOCATION!r}")
+    status("survey", "Survey", "running", f"scanning — {_SURVEY_LOCATION}")
+
+    seen_bssids: dict[str, dict] = {}
+    proc = None
+    _round = 0
+    try:
+        proc = _popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        while True:
+            _check_pause()
+            time.sleep(5)
+            _round += 1
+            if not os.path.exists(csv_file):
+                continue
+            aps, stations = _parse_airodump_csv_full(csv_file)
+            if not aps:
+                continue
+
+            # Filter to scope
+            target_bssids_up = {b.upper() for b in (target_bssids or [])}
+            filtered = []
+            for ap in aps:
+                ssid_ok = (not target_ssids) or (ap["ssid"] in target_ssids)
+                bssid_ok = (not target_bssids_up) or (ap["bssid"].upper() in target_bssids_up)
+                if ssid_ok and bssid_ok:
+                    filtered.append(ap)
+
+            # Assign clients + collect probes per station
+            bssid_idx = {ap["bssid"].upper(): ap for ap in filtered}
+            sta_by_bssid: dict[str, list[dict]] = {}
+            for sta in stations:
+                ab = sta.get("bssid", "").upper()
+                if ab in bssid_idx:
+                    bssid_idx[ab]["clients"].append({
+                        "mac": sta["mac"],
+                        "signal": sta["signal"],
+                        "packets": sta["packets"],
+                    })
+                    sta_by_bssid.setdefault(ab, []).append(sta)
+
+            # Emit survey_ap tokens (Crucible → survey_aps + wireless_networks)
+            if filtered:
+                rows = []
+                for ap in filtered:
+                    rows.append({
+                        "bssid":        ap.get("bssid", ""),
+                        "ssid":         ap.get("ssid", ""),
+                        "channel":      ap.get("channel", ""),
+                        "encryption":   ap.get("encryption", ""),
+                        "cipher":       ap.get("cipher", ""),
+                        "auth":         ap.get("auth", ""),
+                        "wps":          ap.get("wps", False),
+                        "signal_dbm":   ap.get("signal"),
+                        "beacons":      ap.get("beacons", 0),
+                        "client_count": len(ap.get("clients", [])),
+                    })
+                _emit_ap_intel(rows)
+
+                # Emit wireless_client tokens (with probed SSIDs so
+                # Crucible writes clients + probes in one pass)
+                if _ie:
+                    client_rows = []
+                    for ap in filtered:
+                        ab = ap["bssid"].upper()
+                        for sta in sta_by_bssid.get(ab, []):
+                            probed = sta.get("probed", "")
+                            probes = [s.strip() for s in probed.split(",")
+                                      if s.strip()] if probed else []
+                            client_rows.append({
+                                "mac":              sta["mac"],
+                                "associated_bssid": ap["bssid"],
+                                "associated_ssid":  ap.get("ssid", ""),
+                                "signal_dbm":       sta.get("signal"),
+                                "packets":          sta.get("packets", 0),
+                                "probes":           probes,
+                            })
+                    if client_rows:
+                        _ie.emit_intel("wireless_client", client_rows,
+                                       bulk=True)
+
+            new_count = len(filtered) - len(seen_bssids)
+            for ap in filtered:
+                seen_bssids[ap["bssid"].upper()] = ap
+
+            total = len(seen_bssids)
+            if _round % 6 == 0 or new_count > 0:
+                log(f"[survey] {total} AP(s) seen"
+                    + (f" (+{new_count} new)" if new_count > 0 else "")
+                    + f" — {_SURVEY_LOCATION!r}")
+            status("survey", "Survey", "running",
+                   f"{total} AP(s) — {_SURVEY_LOCATION}")
+
+    except KeyboardInterrupt:
+        log("[survey] Stopped by operator")
+    finally:
+        if proc is not None:
+            _kill_proc(proc)
+        # Write final survey.json
+        try:
+            survey_out = output_dir / "survey.json"
+            import json as _sj
+            _sj_data = list(seen_bssids.values())
+            survey_out.write_text(
+                _sj.dumps(_sj_data, indent=2, default=str),
+                encoding="utf-8")
+            log(f"[survey] Wrote {len(_sj_data)} AP(s) to {survey_out}")
+        except Exception:
+            pass
+        status("survey", "Survey", "complete",
+               f"{len(seen_bssids)} AP(s) total")
+
+
 # ── Main orchestrator ─────────────────────────────────────────────────────────
 
 def run(config: dict, project: str) -> None:
@@ -6226,6 +6367,15 @@ def run(config: dict, project: str) -> None:
     try:
         _check_injection(active_monitor)
 
+        # ── Survey mode — lightweight continuous airodump-ng loop ─────
+        # Bypasses the entire normal phase pipeline.  Runs airodump-ng
+        # with --write-interval 5, re-parses every 5 s, emits new APs
+        # via intel tokens.  Loops until killed.
+        if _SURVEY_MODE:
+            _run_survey_loop(active_monitor, output_dir, scan_channel,
+                             target_ssids, target_bssids)
+            return  # unreachable — loop runs until killed
+
         # Phase 0-I: Wireless Intelligence — enumerate all APs broadcasting the
         # target SSID, identify connected clients, score and select best target.
         best_ap, enriched_aps = phase_wireless_intel(
@@ -6249,28 +6399,6 @@ def run(config: dict, project: str) -> None:
         # known firmware CVEs, default credentials, and protocol weaknesses.
         if phases_cfg.get("firmware_correlation", True):
             phase_firmware_correlation(enriched_aps, output_dir)
-
-        print(f"[DBG-run] _SURVEY_MODE={_SURVEY_MODE}  about to check survey branch",
-              flush=True)
-        if _SURVEY_MODE:
-            _survey_total = len(enriched_aps)
-            log(f"[survey] Initial scan — {_survey_total} AP(s) at "
-                f"{_SURVEY_LOCATION!r}")
-            status("survey", "Survey", "running",
-                   f"{_survey_total} AP(s) at {_SURVEY_LOCATION}")
-            _survey_round = 1
-            while True:
-                _check_pause()
-                time.sleep(intel_scan_seconds)
-                _survey_round += 1
-                log(f"[survey] Re-scan #{_survey_round}…")
-                _, _re_aps = phase_wireless_intel(
-                    active_monitor, target_ssids, target_bssids,
-                    output_dir, scan_seconds=intel_scan_seconds,
-                )
-                _survey_total = len(_re_aps)
-                status("survey", "Survey", "running",
-                       f"scan #{_survey_round}: {_survey_total} AP(s)")
 
         # Narrow subsequent phases to the best-scored AP when user has not
         # specified an explicit BSSID — reduces false-positive capture and
@@ -8222,9 +8350,6 @@ def main():
         config["phases"] = {k: False for k in _all_phase_keys}
         log(f"[survey] Survey mode — location: {_SURVEY_LOCATION!r}")
 
-    print(f"[DBG-main] args.survey={args.survey}  _SURVEY_MODE={_SURVEY_MODE}  "
-          f"phases_all_false={all(not v for v in config.get('phases',{}).values())}",
-          flush=True)
     _load_catalogue()
     run(config, args.project)
 
