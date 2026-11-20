@@ -271,6 +271,85 @@ except ImportError:
 _PAUSE = None
 
 
+# ---------------------------------------------------------------------------
+# Checkpoint / progress manager (inlined; will migrate to shared module)
+# ---------------------------------------------------------------------------
+
+class _ProgressManager:
+    """Thread-safe checkpoint for scan recovery."""
+
+    def __init__(self, checkpoint_file):
+        self._file = Path(checkpoint_file)
+        self._lock = threading.Lock()
+        self._state = self._load()
+
+    def _load(self):
+        if self._file.exists():
+            try:
+                data = json.loads(self._file.read_text(encoding="utf-8"))
+                data.setdefault("version", 1)
+                data.setdefault("completed_phases", [])
+                data.setdefault("phase_status", {})
+                return data
+            except Exception:
+                pass
+        return {"version": 1, "started": datetime.now().isoformat(),
+                "completed_phases": [], "phase_status": {}}
+
+    def _save(self):
+        self._file.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(dir=str(self._file.parent), suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(self._state, f, indent=2)
+            os.replace(tmp, str(self._file))
+        except Exception:
+            try:
+                os.unlink(tmp)
+            except Exception:
+                pass
+
+    def is_phase_complete(self, phase):
+        with self._lock:
+            return phase in self._state.get("completed_phases", [])
+
+    def set_phase_status(self, phase, status, label="", detail=""):
+        with self._lock:
+            self._state.setdefault("phase_status", {})[phase] = {
+                "status": status, "label": label or phase,
+                "detail": detail, "updated_at": datetime.now().isoformat(),
+            }
+            if status == "complete":
+                lst = self._state.setdefault("completed_phases", [])
+                if phase not in lst:
+                    lst.append(phase)
+            self._save()
+
+    def save_scan_state(self, state):
+        with self._lock:
+            self._state["scan_state"] = state
+            self._state["version"] = 2
+            self._state["checkpoint_ts"] = datetime.now().isoformat()
+            self._save()
+
+    def load_scan_state(self):
+        with self._lock:
+            return self._state.get("scan_state", {})
+
+    def prepare_resume(self):
+        with self._lock:
+            ps = self._state.get("phase_status", {})
+            for k, v in ps.items():
+                if v.get("status") in ("running", "error"):
+                    v["status"] = "pending"
+                    v["updated_at"] = datetime.now().isoformat()
+            self._save()
+            return dict(self._state)
+
+
+_PM: "_ProgressManager | None" = None
+
+
 def _check_pause():
     if _PAUSE is not None and _PAUSE.check_and_pause():
         sys.exit(_pp.EXIT_PAUSED)
@@ -6256,7 +6335,7 @@ def _run_survey_loop(monitor_iface: str, output_dir: Path,
 # ── Main orchestrator ─────────────────────────────────────────────────────────
 
 def run(config: dict, project: str) -> None:
-    global _scope_bssids, _scope_ssids, _scope_modes, _scope_default_mode, _RUN_DIR
+    global _scope_bssids, _scope_ssids, _scope_modes, _scope_default_mode, _RUN_DIR, _PM
 
     if _MANAGED:
         output_dir = Path(project)
@@ -6265,6 +6344,9 @@ def run(config: dict, project: str) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     _RUN_DIR = output_dir
     _init_fdb()
+
+    _PM = _ProgressManager(output_dir / "checkpoint.json")
+    _PM.prepare_resume()
 
     # Generated wordlists (SSID-seeded, domain-derived, website-scraped,
     # multi-source merges) land in <project>/wordlists/ instead of /tmp/
@@ -6388,27 +6470,46 @@ def run(config: dict, project: str) -> None:
 
         # Phase 0-I: Wireless Intelligence — enumerate all APs broadcasting the
         # target SSID, identify connected clients, score and select best target.
-        best_ap, enriched_aps = phase_wireless_intel(
-            active_monitor, target_ssids, target_bssids, output_dir,
-            scan_seconds=intel_scan_seconds,
-        )
+        if _PM.is_phase_complete("p0i_intel"):
+            log("[orchestrator] Phase 0-I already complete — restoring state")
+            _ss = _PM.load_scan_state()
+            best_ap = _ss.get("best_ap")
+            enriched_aps = _ss.get("enriched_aps", [])
+        else:
+            _PM.set_phase_status("p0i_intel", "running", "Phase 0-I: Wireless Intelligence")
+            best_ap, enriched_aps = phase_wireless_intel(
+                active_monitor, target_ssids, target_bssids, output_dir,
+                scan_seconds=intel_scan_seconds,
+            )
+            _PM.set_phase_status("p0i_intel", "complete", "Phase 0-I: Wireless Intelligence")
+            _PM.save_scan_state({"best_ap": best_ap, "enriched_aps": enriched_aps})
 
-        # Phase 0-II: Contextual Intelligence — emit informational findings
-        # for every observed AP, client, vendor, channel, and authentication
-        # type so the engagement report has full attribution regardless of
-        # which risk-graded findings any subsequent phase produces.
+        # Phase 0-II: Contextual Intelligence
         if phases_cfg.get("contextual_intel", True):
-            phase_contextual_intel(enriched_aps, output_dir)
+            if _PM.is_phase_complete("p0ii_contextual"):
+                log("[orchestrator] Phase 0-II (Contextual Intel) — already complete, skipping")
+            else:
+                _PM.set_phase_status("p0ii_contextual", "running", "Phase 0-II: Contextual Intelligence")
+                phase_contextual_intel(enriched_aps, output_dir)
+                _PM.set_phase_status("p0ii_contextual", "complete", "Phase 0-II: Contextual Intelligence")
 
-        # Phase 0-III: Vendor Recon — classify AP vendors via OUI, VS IEs,
-        # WPS device info; includes Meraki sub-case and multi-SSID detection.
+        # Phase 0-III: Vendor Recon
         if phases_cfg.get("vendor_recon", True) or phases_cfg.get("meraki_recon", True):
-            phase_vendor_recon(enriched_aps, output_dir)
+            if _PM.is_phase_complete("p0iii_vendor"):
+                log("[orchestrator] Phase 0-III (Vendor Recon) — already complete, skipping")
+            else:
+                _PM.set_phase_status("p0iii_vendor", "running", "Phase 0-III: Vendor Recon")
+                phase_vendor_recon(enriched_aps, output_dir)
+                _PM.set_phase_status("p0iii_vendor", "complete", "Phase 0-III: Vendor Recon")
 
-        # Phase 0-IV: Firmware Correlation — match fingerprinted APs against
-        # known firmware CVEs, default credentials, and protocol weaknesses.
+        # Phase 0-IV: Firmware Correlation
         if phases_cfg.get("firmware_correlation", True):
-            phase_firmware_correlation(enriched_aps, output_dir)
+            if _PM.is_phase_complete("p0iv_firmware"):
+                log("[orchestrator] Phase 0-IV (Firmware Correlation) — already complete, skipping")
+            else:
+                _PM.set_phase_status("p0iv_firmware", "running", "Phase 0-IV: Firmware Correlation")
+                phase_firmware_correlation(enriched_aps, output_dir)
+                _PM.set_phase_status("p0iv_firmware", "complete", "Phase 0-IV: Firmware Correlation")
 
         # Narrow subsequent phases to the best-scored AP when user has not
         # specified an explicit BSSID — reduces false-positive capture and
@@ -6419,116 +6520,170 @@ def run(config: dict, project: str) -> None:
             log(f"Best target selected: {best_ap.get('ssid','')!r} "
                 f"[{best_ap['bssid']}] score={best_ap['score']}")
 
-        target_aps = scan_targets(
-            active_monitor, target_ssids, effective_bssids,
-            timeout=30, channel=scan_channel,
-            output_dir=output_dir,
-        )
-
-        active_aps = [ap for ap in target_aps if _is_active_scope(ap)]
-        active_enriched = [ap for ap in enriched_aps if _is_active_scope(ap)]
-        passive_only = [ap for ap in target_aps if not _is_active_scope(ap)]
-        if passive_only:
-            passive_ssids = sorted(set(ap.get("ssid", "?") for ap in passive_only))
-            log(f"Passive-scope SSIDs (monitoring only, no client attacks): "
-                f"{', '.join(passive_ssids)}")
+        # Scan targets + derive active/passive scope lists
+        if _PM.is_phase_complete("scan_targets"):
+            log("[orchestrator] Target scan already complete — restoring state")
+            _ss = _PM.load_scan_state()
+            target_aps = _ss.get("target_aps", [])
+            active_aps = _ss.get("active_aps", [])
+            active_enriched = _ss.get("active_enriched", [])
+            passive_only = _ss.get("passive_only", [])
+        else:
+            _PM.set_phase_status("scan_targets", "running", "Target Scan")
+            target_aps = scan_targets(
+                active_monitor, target_ssids, effective_bssids,
+                timeout=30, channel=scan_channel,
+                output_dir=output_dir,
+            )
+            active_aps = [ap for ap in target_aps if _is_active_scope(ap)]
+            active_enriched = [ap for ap in enriched_aps if _is_active_scope(ap)]
+            passive_only = [ap for ap in target_aps if not _is_active_scope(ap)]
+            if passive_only:
+                passive_ssids = sorted(set(ap.get("ssid", "?") for ap in passive_only))
+                log(f"Passive-scope SSIDs (monitoring only, no client attacks): "
+                    f"{', '.join(passive_ssids)}")
+            _PM.set_phase_status("scan_targets", "complete", "Target Scan")
+            _ss = _PM.load_scan_state()
+            _ss.update({"target_aps": target_aps, "active_aps": active_aps,
+                        "active_enriched": active_enriched, "passive_only": passive_only})
+            _PM.save_scan_state(_ss)
 
         if _PAUSE and _PAUSE.check_and_pause(): sys.exit(_pp.EXIT_PAUSED)
 
         if phases_cfg.get("wep", True):
-            log("[orchestrator] Phase 0 (WEP) — enabled, running")
-            phase_wep(active_monitor, target_aps, output_dir, timeout)
+            if _PM.is_phase_complete("p0_wep"):
+                log("[orchestrator] Phase 0 (WEP) — already complete, skipping")
+            else:
+                log("[orchestrator] Phase 0 (WEP) — enabled, running")
+                _PM.set_phase_status("p0_wep", "running", "Phase 0: WEP Testing")
+                phase_wep(active_monitor, target_aps, output_dir, timeout)
+                _PM.set_phase_status("p0_wep", "complete", "Phase 0: WEP Testing")
         else:
             log("[orchestrator] Phase 0 (WEP) — disabled in config, skipping")
 
         if _PAUSE and _PAUSE.check_and_pause(): sys.exit(_pp.EXIT_PAUSED)
 
         if phases_cfg.get("pmkid", True):
-            log("[orchestrator] Phase 1a (PMKID) — enabled, running clientless capture")
-            phase_pmkid(active_monitor, target_aps, output_dir,
-                        timeout=min(timeout, 120), wordlist=_effective_wl,
-                        hashcat_rules=hashcat_rules)
+            if _PM.is_phase_complete("p1a_pmkid"):
+                log("[orchestrator] Phase 1a (PMKID) — already complete, skipping")
+            else:
+                log("[orchestrator] Phase 1a (PMKID) — enabled, running clientless capture")
+                _PM.set_phase_status("p1a_pmkid", "running", "Phase 1a: PMKID Capture")
+                phase_pmkid(active_monitor, target_aps, output_dir,
+                            timeout=min(timeout, 120), wordlist=_effective_wl,
+                            hashcat_rules=hashcat_rules)
+                _PM.set_phase_status("p1a_pmkid", "complete", "Phase 1a: PMKID Capture")
         else:
             log("[orchestrator] Phase 1a (PMKID) — disabled in config, skipping")
 
         if _PAUSE and _PAUSE.check_and_pause(): sys.exit(_pp.EXIT_PAUSED)
 
         if phases_cfg.get("pmkid_roam", False):
-            log("[orchestrator] Phase 1c (PMKID Roam) — enabled, capturing FT roam events")
-            phase_pmkid_roam(active_monitor, target_aps, output_dir,
-                              timeout=min(timeout, 300),
-                              wordlist=_effective_wl,
-                              hashcat_rules=hashcat_rules)
+            if _PM.is_phase_complete("p1c_pmkid_roam"):
+                log("[orchestrator] Phase 1c (PMKID Roam) — already complete, skipping")
+            else:
+                log("[orchestrator] Phase 1c (PMKID Roam) — enabled, capturing FT roam events")
+                _PM.set_phase_status("p1c_pmkid_roam", "running", "Phase 1c: PMKID Roam")
+                phase_pmkid_roam(active_monitor, target_aps, output_dir,
+                                  timeout=min(timeout, 300),
+                                  wordlist=_effective_wl,
+                                  hashcat_rules=hashcat_rules)
+                _PM.set_phase_status("p1c_pmkid_roam", "complete", "Phase 1c: PMKID Roam")
         else:
             log("[orchestrator] Phase 1c (PMKID Roam) — disabled (default off), skipping")
 
         if _PAUSE and _PAUSE.check_and_pause(): sys.exit(_pp.EXIT_PAUSED)
 
         if phases_cfg.get("wpa_handshake", True):
-            _active_ssids = [s for s in target_ssids
-                             if _scope_modes.get(s, _scope_default_mode) == "active"]
-            if not _active_ssids and target_ssids:
-                log("[orchestrator] Phase 1b (wifite2) — skipped: all target SSIDs are passive scope")
+            if _PM.is_phase_complete("p1b_wifite"):
+                log("[orchestrator] Phase 1b (wifite2) — already complete, skipping")
             else:
-                log("[orchestrator] Phase 1b (wifite2) — enabled, running WPA/WPS attacks")
-                phase_wifite(
-                    active_monitor, _active_ssids or target_ssids, effective_bssids,
-                    active_enriched, _effective_wl, output_dir, timeout,
-                )
+                _active_ssids = [s for s in target_ssids
+                                 if _scope_modes.get(s, _scope_default_mode) == "active"]
+                if not _active_ssids and target_ssids:
+                    log("[orchestrator] Phase 1b (wifite2) — skipped: all target SSIDs are passive scope")
+                else:
+                    log("[orchestrator] Phase 1b (wifite2) — enabled, running WPA/WPS attacks")
+                    _PM.set_phase_status("p1b_wifite", "running", "Phase 1b: WPA Handshake + WPS")
+                    phase_wifite(
+                        active_monitor, _active_ssids or target_ssids, effective_bssids,
+                        active_enriched, _effective_wl, output_dir, timeout,
+                    )
+                    _PM.set_phase_status("p1b_wifite", "complete", "Phase 1b: WPA Handshake + WPS")
 
         if _PAUSE and _PAUSE.check_and_pause(): sys.exit(_pp.EXIT_PAUSED)
 
         if phases_cfg.get("deauth_handshake", True):
-            if not active_enriched and enriched_aps:
-                log("[orchestrator] Phase 1c (Deauth+Handshake) — skipped: all APs are passive scope")
+            if _PM.is_phase_complete("p1c_deauth"):
+                log("[orchestrator] Phase 1c (Deauth+Handshake) — already complete, skipping")
             else:
-                log("[orchestrator] Phase 1c (Deauth+Handshake) — enabled, targeting APs with clients")
-                phase_deauth_handshake(
-                    active_monitor, active_enriched, output_dir,
-                    _effective_wl, timeout, deauth_packets,
-                )
+                if not active_enriched and enriched_aps:
+                    log("[orchestrator] Phase 1c (Deauth+Handshake) — skipped: all APs are passive scope")
+                else:
+                    log("[orchestrator] Phase 1c (Deauth+Handshake) — enabled, targeting APs with clients")
+                    _PM.set_phase_status("p1c_deauth", "running", "Phase 1c: Deauth + Handshake")
+                    phase_deauth_handshake(
+                        active_monitor, active_enriched, output_dir,
+                        _effective_wl, timeout, deauth_packets,
+                    )
+                    _PM.set_phase_status("p1c_deauth", "complete", "Phase 1c: Deauth + Handshake")
 
         if _PAUSE and _PAUSE.check_and_pause(): sys.exit(_pp.EXIT_PAUSED)
 
         if phases_cfg.get("wpa_enterprise", False):
-            if not active_aps and target_aps:
-                log("[orchestrator] Phase 2 (EAPHammer) — skipped: all APs are passive scope")
+            if _PM.is_phase_complete("p2_eaphammer"):
+                log("[orchestrator] Phase 2 (EAPHammer) — already complete, skipping")
             else:
-                log("[orchestrator] Phase 2 (EAPHammer) — enabled, testing WPA-Enterprise")
-                phase_eaphammer(
-                    active_monitor, active_aps,
-                    tools.get("eaphammer", "/opt/eaphammer/eaphammer"),
-                    output_dir,
-                    auth=config.get("eaphammer", {}).get("auth", "wpa-eap"),
-                    timeout=timeout,
-                    asleap_path=asleap_path,
-                )
+                if not active_aps and target_aps:
+                    log("[orchestrator] Phase 2 (EAPHammer) — skipped: all APs are passive scope")
+                else:
+                    log("[orchestrator] Phase 2 (EAPHammer) — enabled, testing WPA-Enterprise")
+                    _PM.set_phase_status("p2_eaphammer", "running", "Phase 2: WPA-Enterprise")
+                    phase_eaphammer(
+                        active_monitor, active_aps,
+                        tools.get("eaphammer", "/opt/eaphammer/eaphammer"),
+                        output_dir,
+                        auth=config.get("eaphammer", {}).get("auth", "wpa-eap"),
+                        timeout=timeout,
+                        asleap_path=asleap_path,
+                    )
+                    _PM.set_phase_status("p2_eaphammer", "complete", "Phase 2: WPA-Enterprise")
 
         if _PAUSE and _PAUSE.check_and_pause(): sys.exit(_pp.EXIT_PAUSED)
 
         if phases_cfg.get("dragonblood_sae", True):
-            log("[orchestrator] Phase 3 (dragonslayer) — enabled, testing WPA3 SAE cryptography")
-            ds_cfg = config.get("dragonslayer", {})
-            phase_dragonslayer(
-                active_monitor, target_aps,
-                tools.get("dragonslayer_client",
-                           "/opt/dragonslayer/dragonslayer-client.sh"),
-                output_dir,
-                attack=ds_cfg.get("attack", 1),
-                client_conf=ds_cfg.get("client_conf", ""),
-                timeout=timeout,
-            )
+            if _PM.is_phase_complete("p3_dragonslayer"):
+                log("[orchestrator] Phase 3 (dragonslayer) — already complete, skipping")
+            else:
+                log("[orchestrator] Phase 3 (dragonslayer) — enabled, testing WPA3 SAE cryptography")
+                _PM.set_phase_status("p3_dragonslayer", "running", "Phase 3: WPA3 SAE Testing")
+                ds_cfg = config.get("dragonslayer", {})
+                phase_dragonslayer(
+                    active_monitor, target_aps,
+                    tools.get("dragonslayer_client",
+                               "/opt/dragonslayer/dragonslayer-client.sh"),
+                    output_dir,
+                    attack=ds_cfg.get("attack", 1),
+                    client_conf=ds_cfg.get("client_conf", ""),
+                    timeout=timeout,
+                )
+                _PM.set_phase_status("p3_dragonslayer", "complete", "Phase 3: WPA3 SAE Testing")
 
         if _PAUSE and _PAUSE.check_and_pause(): sys.exit(_pp.EXIT_PAUSED)
 
         if phases_cfg.get("dragonblood_drain", False):
-            log("[orchestrator] Phase 4 (dragondrain) — enabled, testing SAE resource exhaustion")
-            phase_dragondrain(
-                active_monitor, target_aps,
-                tools.get("dragondrain",
-                           "/opt/dragondrain-and-time/dragondrain"),
-                output_dir, timeout=60,
-            )
+            if _PM.is_phase_complete("p4_dragondrain"):
+                log("[orchestrator] Phase 4 (dragondrain) — already complete, skipping")
+            else:
+                log("[orchestrator] Phase 4 (dragondrain) — enabled, testing SAE resource exhaustion")
+                _PM.set_phase_status("p4_dragondrain", "running", "Phase 4: WPA3 Resource Exhaustion")
+                phase_dragondrain(
+                    active_monitor, target_aps,
+                    tools.get("dragondrain",
+                               "/opt/dragondrain-and-time/dragondrain"),
+                    output_dir, timeout=60,
+                )
+                _PM.set_phase_status("p4_dragondrain", "complete", "Phase 4: WPA3 Resource Exhaustion")
 
         # Collect any PSKs cracked in earlier phases for use by the rogue AP
         cracked_psks = _collect_cracked_psks(output_dir)
@@ -6536,98 +6691,138 @@ def run(config: dict, project: str) -> None:
         if _PAUSE and _PAUSE.check_and_pause(): sys.exit(_pp.EXIT_PAUSED)
 
         if phases_cfg.get("rogue_ap", False):
-            if not active_aps and target_aps:
-                log("[orchestrator] Phase 6a (Rogue AP) — skipped: all APs are passive scope")
+            if _PM.is_phase_complete("p6a_rogue_ap"):
+                log("[orchestrator] Phase 6a (Rogue AP) — already complete, skipping")
             else:
-                log("[orchestrator] Phase 6a (Rogue AP) — enabled, deploying Evil Twin")
-                phase_rogue_ap(
-                    active_monitor, interface, active_aps, active_enriched,
-                    output_dir, rogue_cfg, timeout, cracked_psks,
-                )
+                if not active_aps and target_aps:
+                    log("[orchestrator] Phase 6a (Rogue AP) — skipped: all APs are passive scope")
+                else:
+                    log("[orchestrator] Phase 6a (Rogue AP) — enabled, deploying Evil Twin")
+                    _PM.set_phase_status("p6a_rogue_ap", "running", "Phase 6a: Rogue AP")
+                    phase_rogue_ap(
+                        active_monitor, interface, active_aps, active_enriched,
+                        output_dir, rogue_cfg, timeout, cracked_psks,
+                    )
+                    _PM.set_phase_status("p6a_rogue_ap", "complete", "Phase 6a: Rogue AP")
 
         if _PAUSE and _PAUSE.check_and_pause(): sys.exit(_pp.EXIT_PAUSED)
 
         if phases_cfg.get("karma", False):
-            if _scope_default_mode == "passive" and not active_aps:
-                log("[orchestrator] Phase 6b (KARMA) — skipped: all APs are passive scope")
+            if _PM.is_phase_complete("p6b_karma"):
+                log("[orchestrator] Phase 6b (KARMA) — already complete, skipping")
             else:
-                log("[orchestrator] Phase 6b (KARMA) — enabled, running credential harvesting")
-                phase_karma(
-                    active_monitor, interface, output_dir, rogue_cfg, timeout,
-                )
+                if _scope_default_mode == "passive" and not active_aps:
+                    log("[orchestrator] Phase 6b (KARMA) — skipped: all APs are passive scope")
+                else:
+                    log("[orchestrator] Phase 6b (KARMA) — enabled, running credential harvesting")
+                    _PM.set_phase_status("p6b_karma", "running", "Phase 6b: KARMA")
+                    phase_karma(
+                        active_monitor, interface, output_dir, rogue_cfg, timeout,
+                    )
+                    _PM.set_phase_status("p6b_karma", "complete", "Phase 6b: KARMA")
 
         if _PAUSE and _PAUSE.check_and_pause(): sys.exit(_pp.EXIT_PAUSED)
 
         if phases_cfg.get("mana_loud", False):
-            if _scope_default_mode == "passive" and not active_aps:
-                log("[orchestrator] Phase 6c (MANA Loud) — skipped: all APs are passive scope")
+            if _PM.is_phase_complete("p6c_mana_loud"):
+                log("[orchestrator] Phase 6c (MANA Loud) — already complete, skipping")
             else:
-                log("[orchestrator] Phase 6c (MANA Loud) — enabled, running beacon spam")
-                phase_mana_loud(
-                    active_monitor, interface, output_dir, rogue_cfg, timeout,
-                )
+                if _scope_default_mode == "passive" and not active_aps:
+                    log("[orchestrator] Phase 6c (MANA Loud) — skipped: all APs are passive scope")
+                else:
+                    log("[orchestrator] Phase 6c (MANA Loud) — enabled, running beacon spam")
+                    _PM.set_phase_status("p6c_mana_loud", "running", "Phase 6c: MANA Loud")
+                    phase_mana_loud(
+                        active_monitor, interface, output_dir, rogue_cfg, timeout,
+                    )
+                    _PM.set_phase_status("p6c_mana_loud", "complete", "Phase 6c: MANA Loud")
 
         if _PAUSE and _PAUSE.check_and_pause(): sys.exit(_pp.EXIT_PAUSED)
 
         if phases_cfg.get("client_attacks", True):
-            if not active_aps and target_aps:
-                log("[orchestrator] Phase 7 (Client Attacks) — skipped: all APs are passive scope")
+            if _PM.is_phase_complete("p7_client_attacks"):
+                log("[orchestrator] Phase 7 (Client Attacks) — already complete, skipping")
             else:
-                log("[orchestrator] Phase 7 (Client Attacks) — enabled, testing PMF/BTM/probes")
-                phase_client_attacks(
-                    active_monitor, active_aps, active_enriched, output_dir, timeout,
-                )
+                if not active_aps and target_aps:
+                    log("[orchestrator] Phase 7 (Client Attacks) — skipped: all APs are passive scope")
+                else:
+                    log("[orchestrator] Phase 7 (Client Attacks) — enabled, testing PMF/BTM/probes")
+                    _PM.set_phase_status("p7_client_attacks", "running", "Phase 7: Client Attacks")
+                    phase_client_attacks(
+                        active_monitor, active_aps, active_enriched, output_dir, timeout,
+                    )
+                    _PM.set_phase_status("p7_client_attacks", "complete", "Phase 7: Client Attacks")
 
         if _PAUSE and _PAUSE.check_and_pause(): sys.exit(_pp.EXIT_PAUSED)
 
         if phases_cfg.get("eap_downgrade", False):
-            if not active_aps and target_aps:
-                log("[orchestrator] Phase 8 (EAP Downgrade) — skipped: all APs are passive scope")
+            if _PM.is_phase_complete("p8_eap_downgrade"):
+                log("[orchestrator] Phase 8 (EAP Downgrade) — already complete, skipping")
             else:
-                log("[orchestrator] Phase 8 (EAP Downgrade) — enabled, testing weak EAP methods")
-                phase_eap_downgrade(
-                    active_monitor, active_aps,
-                    tools.get("eaphammer", "/opt/eaphammer/eaphammer"),
-                    output_dir, timeout,
-                )
+                if not active_aps and target_aps:
+                    log("[orchestrator] Phase 8 (EAP Downgrade) — skipped: all APs are passive scope")
+                else:
+                    log("[orchestrator] Phase 8 (EAP Downgrade) — enabled, testing weak EAP methods")
+                    _PM.set_phase_status("p8_eap_downgrade", "running", "Phase 8: EAP Downgrade")
+                    phase_eap_downgrade(
+                        active_monitor, active_aps,
+                        tools.get("eaphammer", "/opt/eaphammer/eaphammer"),
+                        output_dir, timeout,
+                    )
+                    _PM.set_phase_status("p8_eap_downgrade", "complete", "Phase 8: EAP Downgrade")
 
         if _PAUSE and _PAUSE.check_and_pause(): sys.exit(_pp.EXIT_PAUSED)
 
         if phases_cfg.get("eap_fast_anon", False):
-            if not active_aps and target_aps:
-                log("[orchestrator] Phase 8b (EAP-FAST) — skipped: all APs are passive scope")
+            if _PM.is_phase_complete("p8b_eap_fast"):
+                log("[orchestrator] Phase 8b (EAP-FAST) — already complete, skipping")
             else:
-                log("[orchestrator] Phase 8b (EAP-FAST) — enabled, testing anonymous PAC provisioning")
-                phase_eap_fast_anon(
-                    active_monitor, active_aps,
-                    tools.get("eaphammer", "/opt/eaphammer/eaphammer"),
-                    output_dir, timeout,
-                )
+                if not active_aps and target_aps:
+                    log("[orchestrator] Phase 8b (EAP-FAST) — skipped: all APs are passive scope")
+                else:
+                    log("[orchestrator] Phase 8b (EAP-FAST) — enabled, testing anonymous PAC provisioning")
+                    _PM.set_phase_status("p8b_eap_fast", "running", "Phase 8b: EAP-FAST")
+                    phase_eap_fast_anon(
+                        active_monitor, active_aps,
+                        tools.get("eaphammer", "/opt/eaphammer/eaphammer"),
+                        output_dir, timeout,
+                    )
+                    _PM.set_phase_status("p8b_eap_fast", "complete", "Phase 8b: EAP-FAST")
 
         if _PAUSE and _PAUSE.check_and_pause(): sys.exit(_pp.EXIT_PAUSED)
 
         if phases_cfg.get("sae_downgrade", False):
-            if not active_aps and target_aps:
-                log("[orchestrator] Phase 9 (SAE Downgrade) — skipped: all APs are passive scope")
+            if _PM.is_phase_complete("p9_sae_downgrade"):
+                log("[orchestrator] Phase 9 (SAE Downgrade) — already complete, skipping")
             else:
-                log("[orchestrator] Phase 9 (SAE Downgrade) — enabled, testing WPA3/WPA2 transition mode")
-                phase_sae_downgrade(
-                    active_monitor, interface, active_aps, active_enriched,
-                    output_dir, rogue_cfg, timeout,
-                )
+                if not active_aps and target_aps:
+                    log("[orchestrator] Phase 9 (SAE Downgrade) — skipped: all APs are passive scope")
+                else:
+                    log("[orchestrator] Phase 9 (SAE Downgrade) — enabled, testing WPA3/WPA2 transition mode")
+                    _PM.set_phase_status("p9_sae_downgrade", "running", "Phase 9: SAE Downgrade")
+                    phase_sae_downgrade(
+                        active_monitor, interface, active_aps, active_enriched,
+                        output_dir, rogue_cfg, timeout,
+                    )
+                    _PM.set_phase_status("p9_sae_downgrade", "complete", "Phase 9: SAE Downgrade")
 
         if _PAUSE and _PAUSE.check_and_pause(): sys.exit(_pp.EXIT_PAUSED)
 
         if phases_cfg.get("legacy_attacks", True):
-            if not active_aps and target_aps:
-                log("[orchestrator] Phase 11 (Legacy) — skipped: all APs are passive scope")
+            if _PM.is_phase_complete("p11_legacy"):
+                log("[orchestrator] Phase 11 (Legacy) — already complete, skipping")
             else:
-                log("[orchestrator] Phase 11 (Legacy) — enabled, running TKIP/WPS/captive bypass")
-                phase_legacy_attacks(
-                    active_monitor, active_aps, active_enriched, output_dir,
-                    tools, timeout,
-                    managed_iface=interface,
-                )
+                if not active_aps and target_aps:
+                    log("[orchestrator] Phase 11 (Legacy) — skipped: all APs are passive scope")
+                else:
+                    log("[orchestrator] Phase 11 (Legacy) — enabled, running TKIP/WPS/captive bypass")
+                    _PM.set_phase_status("p11_legacy", "running", "Phase 11: Legacy Attacks")
+                    phase_legacy_attacks(
+                        active_monitor, active_aps, active_enriched, output_dir,
+                        tools, timeout,
+                        managed_iface=interface,
+                    )
+                    _PM.set_phase_status("p11_legacy", "complete", "Phase 11: Legacy Attacks")
 
         # Phase 0-IV-VII: Cert/iPSK/captive-portal/identity analysis —
         # run AFTER capture-producing phases (wifite, deauth-handshake,
@@ -6635,40 +6830,65 @@ def run(config: dict, project: str) -> None:
         if _PAUSE and _PAUSE.check_and_pause(): sys.exit(_pp.EXIT_PAUSED)
 
         if phases_cfg.get("server_cert_analysis", True):
-            log("[orchestrator] Phase 0-IV (Cert Analysis) — enabled, analyzing captured EAP-TLS certs")
-            phase_server_cert_analysis(target_aps, output_dir, timeout=60)
+            if _PM.is_phase_complete("p0iv_cert"):
+                log("[orchestrator] Phase 0-IV (Cert Analysis) — already complete, skipping")
+            else:
+                log("[orchestrator] Phase 0-IV (Cert Analysis) — enabled, analyzing captured EAP-TLS certs")
+                _PM.set_phase_status("p0iv_cert", "running", "Phase 0-IV: Cert Analysis")
+                phase_server_cert_analysis(target_aps, output_dir, timeout=60)
+                _PM.set_phase_status("p0iv_cert", "complete", "Phase 0-IV: Cert Analysis")
 
         if _PAUSE and _PAUSE.check_and_pause(): sys.exit(_pp.EXIT_PAUSED)
 
         if phases_cfg.get("ipsk_test", True):
-            log("[orchestrator] Phase 0-V (iPSK) — enabled, detecting Meraki per-client PSK")
-            phase_ipsk_test(active_monitor, interface, enriched_aps,
-                            output_dir, timeout=120)
+            if _PM.is_phase_complete("p0v_ipsk"):
+                log("[orchestrator] Phase 0-V (iPSK) — already complete, skipping")
+            else:
+                log("[orchestrator] Phase 0-V (iPSK) — enabled, detecting Meraki per-client PSK")
+                _PM.set_phase_status("p0v_ipsk", "running", "Phase 0-V: iPSK Test")
+                phase_ipsk_test(active_monitor, interface, enriched_aps,
+                                output_dir, timeout=120)
+                _PM.set_phase_status("p0v_ipsk", "complete", "Phase 0-V: iPSK Test")
 
         if _PAUSE and _PAUSE.check_and_pause(): sys.exit(_pp.EXIT_PAUSED)
 
         if phases_cfg.get("captive_portal_test", True):
-            log("[orchestrator] Phase 0-VI (Captive Portal) — enabled, testing splash bypass")
-            phase_captive_portal_test(target_aps, output_dir,
-                                       primary_iface=interface, timeout=60)
+            if _PM.is_phase_complete("p0vi_captive"):
+                log("[orchestrator] Phase 0-VI (Captive Portal) — already complete, skipping")
+            else:
+                log("[orchestrator] Phase 0-VI (Captive Portal) — enabled, testing splash bypass")
+                _PM.set_phase_status("p0vi_captive", "running", "Phase 0-VI: Captive Portal")
+                phase_captive_portal_test(target_aps, output_dir,
+                                           primary_iface=interface, timeout=60)
+                _PM.set_phase_status("p0vi_captive", "complete", "Phase 0-VI: Captive Portal")
 
         if _PAUSE and _PAUSE.check_and_pause(): sys.exit(_pp.EXIT_PAUSED)
 
         if phases_cfg.get("eaptls_identity_analysis", True):
-            log("[orchestrator] Phase 0-VII (EAP Identity) — enabled, parsing EAPOL for leaked identities")
-            phase_eaptls_identity_analysis(output_dir, timeout=30)
+            if _PM.is_phase_complete("p0vii_eap_identity"):
+                log("[orchestrator] Phase 0-VII (EAP Identity) — already complete, skipping")
+            else:
+                log("[orchestrator] Phase 0-VII (EAP Identity) — enabled, parsing EAPOL for leaked identities")
+                _PM.set_phase_status("p0vii_eap_identity", "running", "Phase 0-VII: EAP Identity")
+                phase_eaptls_identity_analysis(output_dir, timeout=30)
+                _PM.set_phase_status("p0vii_eap_identity", "complete", "Phase 0-VII: EAP Identity")
 
         if _PAUSE and _PAUSE.check_and_pause(): sys.exit(_pp.EXIT_PAUSED)
 
         if phases_cfg.get("post_connection", False):
-            if not active_aps and target_aps:
-                log("[orchestrator] Phase 10 (Post-Connection) — skipped: all APs are passive scope")
+            if _PM.is_phase_complete("p10_post_connection"):
+                log("[orchestrator] Phase 10 (Post-Connection) — already complete, skipping")
             else:
-                log("[orchestrator] Phase 10 (Post-Connection) — enabled, running ARP/LLMNR/nmap")
-                _ap_iface = (rogue_cfg.get("ap_interface") or "").strip()
-                if not _ap_iface:
-                    _ap_iface = _find_ap_interface([interface, active_monitor])
-                phase_post_connection(_ap_iface, output_dir, post_cfg, timeout)
+                if not active_aps and target_aps:
+                    log("[orchestrator] Phase 10 (Post-Connection) — skipped: all APs are passive scope")
+                else:
+                    log("[orchestrator] Phase 10 (Post-Connection) — enabled, running ARP/LLMNR/nmap")
+                    _PM.set_phase_status("p10_post_connection", "running", "Phase 10: Post-Connection")
+                    _ap_iface = (rogue_cfg.get("ap_interface") or "").strip()
+                    if not _ap_iface:
+                        _ap_iface = _find_ap_interface([interface, active_monitor])
+                    phase_post_connection(_ap_iface, output_dir, post_cfg, timeout)
+                    _PM.set_phase_status("p10_post_connection", "complete", "Phase 10: Post-Connection")
 
     finally:
         disable_monitor_mode(active_monitor, interface)
@@ -6687,16 +6907,21 @@ def run(config: dict, project: str) -> None:
     # mode; running it while the interface is wlan0mon causes hostapd/scapy
     # to fail with "Interface not found".
     if phases_cfg.get("krack", True):
-        if not active_aps and target_aps:
-            log("[orchestrator] Phase 5 (KRACK) — skipped: all APs are passive scope")
+        if _PM.is_phase_complete("p5_krack"):
+            log("[orchestrator] Phase 5 (KRACK) — already complete, skipping")
         else:
-            log("[orchestrator] Phase 5 (KRACK) — enabled, testing key reinstallation")
-            phase_krack(
-                interface, active_aps,
-                tools.get("krackattacks",
-                           "/opt/krackattacks-scripts/krackattack/krack-test-client.py"),
-                output_dir, timeout=timeout,
-            )
+            if not active_aps and target_aps:
+                log("[orchestrator] Phase 5 (KRACK) — skipped: all APs are passive scope")
+            else:
+                log("[orchestrator] Phase 5 (KRACK) — enabled, testing key reinstallation")
+                _PM.set_phase_status("p5_krack", "running", "Phase 5: KRACK Testing")
+                phase_krack(
+                    interface, active_aps,
+                    tools.get("krackattacks",
+                               "/opt/krackattacks-scripts/krackattack/krack-test-client.py"),
+                    output_dir, timeout=timeout,
+                )
+                _PM.set_phase_status("p5_krack", "complete", "Phase 5: KRACK Testing")
 
     save_findings(output_dir)
 
